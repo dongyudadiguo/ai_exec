@@ -26,9 +26,11 @@ def run_python(code):
         [executable, "-c", code],
         env={**environ, "PYTHONIOENCODING": "utf-8"},
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
     )
-    out = p.stdout + p.stderr
+    out = (p.stdout or "") + (p.stderr or "")
     return out + (f"\n[exit {p.returncode}]" if p.returncode else "")
 
 

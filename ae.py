@@ -1,5 +1,6 @@
 import re
 import subprocess
+from itertools import batched
 from os import environ
 from pathlib import Path
 from sys import argv, executable
@@ -23,8 +24,10 @@ TOOL = pydantic_function_tool(
 
 
 def markdown_messages(text):
-    parts = re.split(r"(?m)^##\s+(.+?)\s*$", text)
-    return [{"role": role.strip().lower(), "content": content.strip()} for role, content in zip(parts[1::2], parts[2::2])] or [{"role": "user", "content": text.strip()}]
+    return [
+        {"role": role.strip().lower(), "content": content.strip()}
+        for role, content in batched(re.split(r"(?m)^##\s+(.+?)\s*$", text)[1:], 2)
+    ]
 
 
 def save(path, messages):
@@ -32,15 +35,7 @@ def save(path, messages):
 
 
 def run_python(code):
-    return subprocess.run(
-        [executable, "-u", "-c", code],
-        env={**environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"},
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    ).stdout[:20000]
+    return subprocess.check_output([executable, "-c", code], text=True, stderr=subprocess.STDOUT)[:20000]
 
 
 def chat(client, path):
@@ -53,20 +48,16 @@ def chat(client, path):
             tools=[TOOL],
             parallel_tool_calls=False,
         ).choices[0].message
-        calls = message.tool_calls or []
-        item = {"role": "assistant", "content": message.content or ""}
-        if calls:
-            item["tool_calls"] = [call.model_dump(exclude={"function": {"parsed_arguments"}}) for call in calls]
-            context.append(item)
-        else:
+        item = {"role": "assistant", "content": message.content}
+        if not message.tool_calls:
             messages.append(item)
-
-        for call in calls:
-            context.append({"role": "tool", "tool_call_id": call.id, "content": run_python(call.function.parsed_arguments.code)})
-
-        save(path, messages)
-        if not calls:
+            save(path, messages)
             return
+
+        item["tool_calls"] = [call.model_dump(exclude={"function": {"parsed_arguments"}}) for call in message.tool_calls]
+        context.append(item)
+        for call in message.tool_calls:
+            context.append({"role": "tool", "tool_call_id": call.id, "content": run_python(call.function.parsed_arguments.code)})
 
 
 def main():

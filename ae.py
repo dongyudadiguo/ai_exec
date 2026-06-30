@@ -54,23 +54,39 @@ def markdown_messages(text):
     return messages or [{"role": "user", "content": text}]
 
 
-def run_python(code):
-    p = subprocess.run(
-        [executable, "-c", code],
-        env={**environ, "PYTHONIOENCODING": "utf-8"},
+def run_python(file, code):
+    p = subprocess.Popen(
+        [executable, "-u", "-c", code],
+        env={**environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"},
         text=True,
         encoding="utf-8",
         errors="replace",
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        bufsize=1,
     )
-    out = (p.stdout or "") + (p.stderr or "")
-    return out + (f"\n[exit {p.returncode}]" if p.returncode else "")
+    out = []
+    for c in iter(lambda: p.stdout.read(1), ""):
+        out.append(c)
+        file.write(c)
+        file.flush()
+    p.wait()
+    out = "".join(out)
+    if p.returncode:
+        out += f"\n[exit {p.returncode}]"
+        file.write(f"\n[exit {p.returncode}]")
+        file.flush()
+    return out
 
 
 def tool_result(file, call):
     code = call.function.parsed_arguments.code
-    out = run_python(code)
-    file.write(f"\n\n## Tool: {call.function.name}\n\n```python\n{code}\n```\n\n```text\n{out[:20000]}\n```\n")
+    file.write(f"\n\n## Tool: {call.function.name}\n\n```python\n{code}\n```\n\n```text\n")
+    file.flush()
+    out = run_python(file, code)
+    if len(out) > 20000:
+        file.write("\n[context truncated]")
+    file.write("\n```\n")
     file.flush()
     return out[:20000]
 
@@ -80,26 +96,32 @@ def chat(client, path):
     with path.open("a", encoding="utf-8") as file:
         while True:
             opened = False
-            with client.chat.completions.stream(model=MODEL, messages=messages, tools=[TOOL]) as stream:
+            calls = []
+            with client.chat.completions.stream(model=MODEL, messages=messages, tools=[TOOL], parallel_tool_calls=False) as stream:
                 for event in stream:
                     if event.type == "content.delta":
+                        if not opened and not event.delta.strip():
+                            continue
                         if not opened:
                             file.write("\n\n## Assistant\n\n")
                             opened = True
                         file.write(event.delta)
                         file.flush()
+                    if event.type == "tool_calls.function.arguments.done":
+                        message = stream.current_completion_snapshot.choices[0].message
+                        call = message.tool_calls[event.index]
+                        calls.append(call)
+                        messages.append({
+                            "role": "assistant",
+                            "content": message.content or "",
+                            "tool_calls": [call.model_dump(exclude={"function": {"parsed_arguments"}})],
+                        })
+                        messages.append({"role": "tool", "tool_call_id": call.id, "content": tool_result(file, call)})
                 message = stream.get_final_completion().choices[0].message
 
-            calls = message.tool_calls or []
-            messages.append({
-                "role": "assistant",
-                "content": message.content or "",
-                **({"tool_calls": [c.model_dump(exclude={"function": {"parsed_arguments"}}) for c in calls]} if calls else {}),
-            })
             if not calls:
+                messages.append({"role": "assistant", "content": message.content or ""})
                 return
-            for call in calls:
-                messages.append({"role": "tool", "tool_call_id": call.id, "content": tool_result(file, call)})
 
 
 def main():

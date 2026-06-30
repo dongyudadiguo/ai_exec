@@ -1,4 +1,5 @@
 import subprocess
+import re
 from os import environ
 from pathlib import Path
 from sys import argv, executable
@@ -19,6 +20,38 @@ TOOL = pydantic_function_tool(
     name="python",
     description="Execute Python code and return stdout/stderr.",
 )
+
+ROLE_HEADING = re.compile(r"^##\s+(System|Developer|User|Assistant)\s*$", re.IGNORECASE)
+ROLE_ALIASES = {
+    "system": "system",
+    "developer": "developer",
+    "user": "user",
+    "assistant": "assistant",
+}
+
+
+def markdown_messages(text):
+    messages = []
+    role = "user"
+    lines = []
+
+    def flush():
+        nonlocal lines
+        content = "\n".join(lines).strip()
+        if content:
+            messages.append({"role": role, "content": content})
+        lines = []
+
+    for line in text.splitlines():
+        match = ROLE_HEADING.match(line.strip())
+        if match:
+            flush()
+            role = ROLE_ALIASES[match.group(1).lower()]
+            continue
+        lines.append(line)
+
+    flush()
+    return messages or [{"role": "user", "content": text}]
 
 
 def run_python(code):
@@ -43,7 +76,7 @@ def tool_result(file, call):
 
 
 def chat(client, path):
-    messages = [{"role": "user", "content": path.read_text(encoding="utf-8")}]
+    messages = markdown_messages(path.read_text(encoding="utf-8"))
     with path.open("a", encoding="utf-8") as file:
         while True:
             opened = False

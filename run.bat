@@ -1,1 +1,1 @@
-python ae.py
+python ae.py content.md

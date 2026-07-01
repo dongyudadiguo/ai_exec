@@ -22,7 +22,7 @@ TOOL = pydantic_function_tool(
 )
 
 MESSAGE_RE = re.compile(r"(?ms)^##\s+((?:system|user|assistant)|tool\s+\S+)\s*\n(.*?)(?=^##\s+(?:(?:system|user|assistant)|tool\s+\S+)\s*\n|\Z)")
-ASSISTANT_TOOL_RE = re.compile(r"(?ms)^###\s+tool\s+(\S+)\s+(\S+)\s*\n+```json\n(.*?)\n```")
+ASSISTANT_TOOL_RE = re.compile(r"(?ms)^###\s+tool\s+(\S+)\s+(\S+)\s*\n+```[^\n]*\n(.*?)\n```")
 FENCE_RE = re.compile(r"(?ms)^```[^\n]*\n(.*?)\n```$")
 
 
@@ -52,7 +52,7 @@ def assistant_parts(body):
     if not matches:
         return body.strip(), []
     return ASSISTANT_TOOL_RE.sub("", body).strip() or None, [
-        tool_call(match.group(1), match.group(2), PythonArgs.model_validate_json(match.group(3)).code)
+        tool_call(match.group(1), match.group(2), match.group(3))
         for match in matches
     ]
 
@@ -85,7 +85,7 @@ def markdown_message(message):
         body = "\n\n".join(
             [body]
             + [
-                f"### tool {call['function']['name']} {call['id']}\n\n{fence('json', call['function']['arguments'])}"
+                f"### tool {call['function']['name']} {call['id']}\n\n{fence('', tool_code(call))}"
                 for call in message["tool_calls"]
             ]
         ).strip()

@@ -22,17 +22,19 @@ TOOL = pydantic_function_tool(
 )
 
 MESSAGE_RE = re.compile(r"(?ms)^##\s+((?:system|user|assistant)|tool\s+\S+)\s*\n(.*?)(?=^##\s+(?:(?:system|user|assistant)|tool\s+\S+)\s*\n|\Z)")
-ASSISTANT_TOOL_RE = re.compile(r"(?ms)^###\s+tool\s+(\S+)\s+(\S+)\s*\n+```[^\n]*\n(.*?)\n```")
-FENCE_RE = re.compile(r"(?ms)^```[^\n]*\n(.*?)\n```$")
+ASSISTANT_TOOL_RE = re.compile(r"(?ms)^###\s+tool\s+(\S+)\s+(\S+)\s*\n+(`{3,})[^\n]*\n(.*?)\n\3")
+FENCE_RE = re.compile(r"(?ms)^(`{3,})[^\n]*\n(.*?)\n\1$")
 
 
 def fence(lang, text):
-    return f"```{lang}\n{text or ''}\n```"
+    text = text or ""
+    ticks = "`" * max(3, max(map(len, re.findall(r"`+", text)), default=0) + 1)
+    return f"{ticks}{lang}\n{text}\n{ticks}"
 
 
 def unfence(text):
     match = FENCE_RE.fullmatch(text.strip("\n"))
-    return match.group(1) if match else text.strip()
+    return match.group(2) if match else text.strip()
 
 
 def tool_call(name, call_id, code):
@@ -52,7 +54,7 @@ def assistant_parts(body):
     if not matches:
         return body.strip(), []
     return ASSISTANT_TOOL_RE.sub("", body).strip() or None, [
-        tool_call(match.group(1), match.group(2), match.group(3))
+        tool_call(match.group(1), match.group(2), match.group(4))
         for match in matches
     ]
 

@@ -79,7 +79,7 @@ def markdown_messages(text):
 def markdown_message(message):
     role = message["role"]
     if role == "tool":
-        return block(f"tool {message['tool_call_id']}", fence("text", message["content"]))
+        return block(f"tool {message['tool_call_id']}", message["content"] or "")
 
     body = message.get("content") or ""
     if role == "assistant" and message.get("tool_calls"):

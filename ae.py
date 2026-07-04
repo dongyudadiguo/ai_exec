@@ -1,30 +1,19 @@
+import json
 import re
 import subprocess
 from os import environ
 from pathlib import Path
 from sys import argv, executable
 
-from openai import OpenAI, pydantic_function_tool
-from pydantic import BaseModel
+from openai import OpenAI
 
 
 MODEL = environ["OPENAI_MODEL"]
-
-
-class PythonArgs(BaseModel):
-    code: str
-
-
-TOOL = pydantic_function_tool(
-    PythonArgs,
-    name="python",
-    description="Execute Python code and return stdout/stderr.",
-)
+TOOL = {"type": "function", "function": {"name": "python", "description": "Execute Python code and return stdout/stderr.", "parameters": {"type": "object", "properties": {"code": {"type": "string"}}, "required": ["code"]}}}
 
 MESSAGE_RE = re.compile(r"(?ms)^##\s+((?:system|user|assistant)|tool\s+\S+)\s+(-+)[^\S\n]*\n(.*?)\n^\2[^\S\n]*$")
 ASSISTANT_TOOL_RE = re.compile(r"(?ms)^###\s+tool\s+(\S+)\s+(\S+)\s*\n+(`{3,})[^\n]*\n(.*?)\n\3")
 FENCE_RE = re.compile(r"(?ms)^(`{3,})[^\n]*\n(.*?)\n\1$")
-GAP_RE = re.compile(r"\s*")
 
 
 def fence(lang, text):
@@ -47,39 +36,27 @@ def tool_call(name, call_id, code):
     return {
         "id": call_id,
         "type": "function",
-        "function": {"name": name, "arguments": PythonArgs(code=code).model_dump_json()},
+        "function": {"name": name, "arguments": json.dumps({"code": code})},
     }
 
 
 def tool_code(call):
-    return PythonArgs.model_validate_json(call["function"]["arguments"]).code
+    return json.loads(call["function"]["arguments"])["code"]
 
 
 def assistant_parts(body):
     matches = list(ASSISTANT_TOOL_RE.finditer(body))
     if not matches:
         return body.strip(), []
-    return ASSISTANT_TOOL_RE.sub("", body).strip() or None, [
-        tool_call(match.group(1), match.group(2), match.group(4))
-        for match in matches
-    ]
+    return ASSISTANT_TOOL_RE.sub("", body).strip() or None, [tool_call(match.group(1), match.group(2), match.group(4)) for match in matches]
 
 
 def markdown_messages(text):
     messages = []
     pos = 0
-    while pos < len(text):
-        pos = GAP_RE.match(text, pos).end()
-        if pos >= len(text):
-            break
-        match = MESSAGE_RE.match(text, pos)
-        if not match:
-            match = MESSAGE_RE.search(text, pos)
-            messages.append({"role": "user", "content": text[pos:match.start() if match else len(text)].strip()})
-            if not match:
-                return messages
-            pos = match.start()
-            continue
+    for match in MESSAGE_RE.finditer(text):
+        if text[pos:match.start()].strip():
+            messages.append({"role": "user", "content": text[pos:match.start()].strip()})
         heading, _, body = match.groups()
         parts = heading.split()
         role = parts[0].lower()
@@ -94,6 +71,8 @@ def markdown_messages(text):
         else:
             messages.append({"role": role, "content": body.strip()})
         pos = match.end()
+    if text[pos:].strip():
+        messages.append({"role": "user", "content": text[pos:].strip()})
     return messages
 
 
@@ -130,21 +109,18 @@ def chat(client, path):
     messages = markdown_messages(path.read_text(encoding="utf-8"))
     path.write_text("\n\n".join(map(markdown_message, messages)), encoding="utf-8")
     while True:
-        message = client.beta.chat.completions.parse(
+        message = client.chat.completions.create(
             model=MODEL,
             messages=messages,
             tools=[TOOL],
             parallel_tool_calls=False,
         ).choices[0].message
-        item = {"role": "assistant", "content": message.content}
-        if message.tool_calls:
-            item["tool_calls"] = [call.model_dump(exclude={"function": {"parsed_arguments"}}) for call in message.tool_calls]
-        messages = append(path, item)
+        messages = append(path, message.model_dump(exclude_none=True))
         if not message.tool_calls:
             return
 
         for call in message.tool_calls:
-            messages = append(path, {"role": "tool", "tool_call_id": call.id, "content": run_python(call.function.parsed_arguments.code)})
+            messages = append(path, {"role": "tool", "tool_call_id": call.id, "content": run_python(json.loads(call.function.arguments)["code"])})
 
 
 def main():

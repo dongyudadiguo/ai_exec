@@ -1,6 +1,6 @@
 ## system ---
 
-主动调动 Python 工具完成任意任务，默认谨慎
+Proactively use Python for any task; cautious by default.
 
 ---
 

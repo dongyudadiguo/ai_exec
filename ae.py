@@ -74,8 +74,12 @@ def markdown_messages(text):
             break
         match = MESSAGE_RE.match(text, pos)
         if not match:
-            messages.append({"role": "user", "content": text[pos:].strip()})
-            return messages
+            match = MESSAGE_RE.search(text, pos)
+            messages.append({"role": "user", "content": text[pos:match.start() if match else len(text)].strip()})
+            if not match:
+                return messages
+            pos = match.start()
+            continue
         heading, _, body = match.groups()
         parts = heading.split()
         role = parts[0].lower()
@@ -124,6 +128,7 @@ def run_python(code):
 
 def chat(client, path):
     messages = markdown_messages(path.read_text(encoding="utf-8"))
+    path.write_text("\n\n".join(map(markdown_message, messages)), encoding="utf-8")
     while True:
         message = client.beta.chat.completions.parse(
             model=MODEL,

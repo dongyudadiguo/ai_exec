@@ -21,15 +21,21 @@ TOOL = pydantic_function_tool(
     description="Execute Python code and return stdout/stderr.",
 )
 
-MESSAGE_RE = re.compile(r"(?ms)^##\s+((?:system|user|assistant)|tool\s+\S+)\s*\n(.*?)(?=^##\s+(?:(?:system|user|assistant)|tool\s+\S+)\s*\n|\Z)")
+MESSAGE_RE = re.compile(r"(?ms)^##\s+((?:system|user|assistant)|tool\s+\S+)\s+(-+)[^\S\n]*\n(.*?)\n^\2[^\S\n]*$")
 ASSISTANT_TOOL_RE = re.compile(r"(?ms)^###\s+tool\s+(\S+)\s+(\S+)\s*\n+(`{3,})[^\n]*\n(.*?)\n\3")
 FENCE_RE = re.compile(r"(?ms)^(`{3,})[^\n]*\n(.*?)\n\1$")
+GAP_RE = re.compile(r"\s*")
 
 
 def fence(lang, text):
     text = text or ""
     ticks = "`" * max(3, max(map(len, re.findall(r"`+", text)), default=0) + 1)
     return f"{ticks}{lang}\n{text}\n{ticks}"
+
+
+def block(heading, body):
+    end = "-" * max(3, max(map(len, re.findall(r"(?m)^(-+)[^\S\n]*$", body)), default=0) + 1)
+    return f"## {heading} {end}\n\n{body}\n{end}"
 
 
 def unfence(text):
@@ -61,7 +67,16 @@ def assistant_parts(body):
 
 def markdown_messages(text):
     messages = []
-    for heading, body in MESSAGE_RE.findall(text):
+    pos = 0
+    while pos < len(text):
+        pos = GAP_RE.match(text, pos).end()
+        if pos >= len(text):
+            break
+        match = MESSAGE_RE.match(text, pos)
+        if not match:
+            messages.append({"role": "user", "content": text[pos:].strip()})
+            return messages
+        heading, _, body = match.groups()
         parts = heading.split()
         role = parts[0].lower()
         if role == "tool":
@@ -74,13 +89,14 @@ def markdown_messages(text):
             messages.append(item)
         else:
             messages.append({"role": role, "content": body.strip()})
+        pos = match.end()
     return messages
 
 
 def markdown_message(message):
     role = message["role"]
     if role == "tool":
-        return f"## tool {message['tool_call_id']}\n\n{fence('text', message['content'])}"
+        return block(f"tool {message['tool_call_id']}", fence("text", message["content"]))
 
     body = message.get("content") or ""
     if role == "assistant" and message.get("tool_calls"):
@@ -91,7 +107,7 @@ def markdown_message(message):
                 for call in message["tool_calls"]
             ]
         ).strip()
-    return f"## {role}\n\n{body}"
+    return block(role, body)
 
 
 def append(path, message):
@@ -103,7 +119,7 @@ def append(path, message):
 
 
 def run_python(code):
-    return subprocess.run([executable, "-c", code], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout[:20000]
+    return subprocess.run([executable, "-X", "utf8", "-c", code], text=True, encoding="utf-8", stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout[:20000]
 
 
 def chat(client, path):

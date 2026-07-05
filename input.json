@@ -1,0 +1,18 @@
+{
+  "url": "https://uuapi.net/v1/chat/completions",
+  "headers": {
+    "Authorization": "Bearer sk-ecf7d70c71c8df2063f0045ef2efbeadf962f243f45db132e5eb5796de123b6f",
+    "Content-Type": "application/json"
+  },
+  "json": {
+    "model": "gpt-5.5",
+    "reasoning_effort": "xhigh",
+    "stream": false,
+    "messages": [
+      {
+        "role": "system",
+        "content": "Proactively use Python for any task; cautious by default\nCheck the `skills` folder, update and use it to avoid reinventing the wheel\nYou are called from `ae.py`"
+      }
+    ]
+  }
+}

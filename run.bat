@@ -1,1 +1,1 @@
-python ae.py content.md
+python ae.py input.json

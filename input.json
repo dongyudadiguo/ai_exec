@@ -13,6 +13,27 @@
         "role": "system",
         "content": "Proactively use Python for any task; cautious by default\nCheck the `skills` folder, update and use it to avoid reinventing the wheel\nYou are called from `ae.py`"
       }
-    ]
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "python",
+          "description": "Execute Python code and return stdout/stderr.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ]
+          }
+        }
+      }
+    ],
+    "parallel_tool_calls": false
   }
 }

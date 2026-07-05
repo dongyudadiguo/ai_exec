@@ -2,7 +2,7 @@
 
 Proactively use Python for any task; cautious by default.
 
-Proactively update the `skills` folder and invoke the skills to save tokens.
+You must update the `skills` folder and invoke the skills to save tokens.
 
 ---
 

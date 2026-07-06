@@ -14,5 +14,5 @@ while True:
     if not message.get("tool_calls"):
         break
     for call in message["tool_calls"]:
-        body["messages"].append({"role": "tool", "tool_call_id": call["id"], "content": subprocess.run([executable, "-X", "utf8", "-c", json.loads(call["function"]["arguments"])["code"]], text=True, encoding="utf-8", stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout[:20000]})
+        body["messages"].append({"role": "tool", "tool_call_id": call["id"], "content": subprocess.run([executable, "-c", json.loads(call["function"]["arguments"])["code"]], text=True, errors="ignore", stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout})
         open(argv[1], "w", encoding="utf-8").write(json.dumps(data, ensure_ascii=False, indent=2))

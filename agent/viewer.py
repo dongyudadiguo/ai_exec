@@ -12,7 +12,7 @@ from email.parser import BytesParser
 from email.policy import default
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parent
 INPUT_FILE = ROOT / "input.json"
@@ -21,6 +21,10 @@ HOST = "127.0.0.1"
 PORT = int(os.environ.get("AE_VIEWER_PORT", "8765"))
 _process = None
 _process_lock = threading.Lock()
+_state_cache = {"mtime": None, "messages": None, "model": "", "usage": None}
+_state_cache_lock = threading.Lock()
+_blob_cache = {}
+TOOL_PREVIEW = int(os.environ.get("AE_TOOL_PREVIEW", "800"))
 
 
 def read_input():
@@ -125,17 +129,83 @@ def parse_multipart(handler):
     return text, files
 
 
-def state_payload():
-    data = read_input()
-    body = data.get("json", {})
-    messages = body.get("messages", [])
+
+def _blob_url(data_url):
+    key = str(abs(hash(data_url)))
+    _blob_cache[key] = data_url
+    return f"/api/blob?id={key}"
+
+
+def display_content(content):
+    if isinstance(content, list):
+        out = []
+        for part in content:
+            if part.get("type") == "image_url":
+                p = dict(part)
+                img = dict(p.get("image_url") or {})
+                url = img.get("url", "")
+                if url.startswith("data:image/"):
+                    img["url"] = _blob_url(url)
+                p["image_url"] = img
+                out.append(p)
+            else:
+                out.append(part)
+        return out
+    if isinstance(content, str) and "data:image/" in content:
+        return re.sub(r"data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+", lambda m: _blob_url(m.group(0).replace("\n", "").replace("\r", "")), content)
+    return content
+
+
+def display_message(m):
+    d = {"role": m.get("role", "message")}
+    if "content" in m:
+        d["content"] = display_content(m.get("content"))
+    if m.get("role") == "tool":
+        c = str(m.get("content", ""))
+        d["content"] = c[:TOOL_PREVIEW] + (f"\n\n…… 已截断，完整长度 {len(c)} 字符" if len(c) > TOOL_PREVIEW else "")
+        d["tool_content_length"] = len(c)
+    if m.get("tool_calls"):
+        d["tool_calls"] = [{"id": c.get("id"), "function": {"name": (c.get("function") or {}).get("name", "python")}} for c in m.get("tool_calls", [])]
+    return d
+
+
+def load_cached():
+    st = INPUT_FILE.stat()
+    mtime = st.st_mtime
+    with _state_cache_lock:
+        if _state_cache["mtime"] != mtime or _state_cache["messages"] is None:
+            data = read_input()
+            body = data.get("json", {})
+            messages = body.get("messages", [])
+            _state_cache.update({"mtime": mtime, "messages": messages, "model": body.get("model", ""), "usage": None})
+        return mtime, _state_cache["model"], _state_cache["messages"]
+
+
+def state_payload(light_if_unchanged=False, since=None, after=None):
+    mtime, model, messages = load_cached()
+    is_running = running()
+    if light_if_unchanged and since is not None and mtime <= since:
+        return {"unchanged": True, "running": is_running, "updated": mtime, "count": len(messages)}
+    reset = after is None or after < 0 or after > len(messages)
+    selected = messages if reset else messages[after:]
     return {
-        "running": running(),
-        "model": body.get("model", ""),
-        "messages": messages,
-        "usage": usage_from_messages(messages),
-        "updated": INPUT_FILE.stat().st_mtime,
+        "running": is_running,
+        "model": model,
+        "messages": [display_message(m) for m in selected],
+        "updated": mtime,
+        "count": len(messages),
+        "offset": 0 if reset else after,
+        "reset": reset,
     }
+
+
+def usage_payload():
+    mtime, model, messages = load_cached()
+    with _state_cache_lock:
+        if _state_cache.get("usage") is None:
+            _state_cache["usage"] = usage_from_messages(messages)
+        usage = _state_cache["usage"]
+    return {"updated": mtime, "usage": usage}
 
 
 PAGE = r"""
@@ -158,7 +228,7 @@ PAGE = r"""
 <form id="composer" class="composer"><div class="composer-inner"><div id="drop" class="drop"><textarea id="message" name="message" placeholder="输入消息，或拖入/粘贴文件、图片"></textarea><div id="files" class="files"></div><input id="fileInput" name="files" type="file" multiple class="hidden"></div><button id="run" class="run" type="submit">运行</button></div></form>
 <script>
 const messagesEl=document.getElementById('messages'), emptyEl=document.getElementById('empty'), composer=document.getElementById('composer'), runBtn=document.getElementById('run'), msgInput=document.getElementById('message'), fileInput=document.getElementById('fileInput'), drop=document.getElementById('drop'), filesEl=document.getElementById('files'), usage=document.getElementById('usage'), usagePop=document.getElementById('usagePop');
-let selectedFiles=[], isRunning=false;
+let selectedFiles=[], isRunning=false, lastUpdated=0, messageCount=0, usageLoaded=false;
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function inlineMd(text){
   return esc(text)
@@ -210,14 +280,16 @@ function toolSummary(m){
   if(m.tool_calls?.length) return `<div class="tools">${m.tool_calls.map(c=>`<div class="tool-summary">调用工具：${esc(c.function?.name||'python')}</div>`).join('')}</div>`;
   return '';
 }
+function messageHtml(m){return m.role==='tool'?toolSummary(m):`<article class="msg ${esc(m.role||'')}"><div class="role"><span>${esc(m.role||'message')}</span></div>${contentHtml(m.content)}${toolSummary(m)}</article>`}
 function render(data){
   isRunning=data.running; document.getElementById('model').textContent=data.model||'model'; document.getElementById('status').textContent=isRunning?'运行中':'空闲';
   drop.classList.toggle('hidden', isRunning); runBtn.textContent=isRunning?'结束进程':'运行'; runBtn.classList.toggle('stop', isRunning);
-  const msgs=data.messages||[]; emptyEl.classList.toggle('hidden', msgs.length>0);
-  messagesEl.innerHTML=msgs.map(m=>m.role==='tool'?toolSummary(m):`<article class="msg ${esc(m.role||'')}"><div class="role"><span>${esc(m.role||'message')}</span></div>${contentHtml(m.content)}${toolSummary(m)}</article>`).join('');
-  const by=data.usage?.by_role||{}; usagePop.innerHTML=`<strong>估算总量：${esc(data.usage?.estimated_total||0)}</strong><br>${Object.entries(by).map(([k,v])=>`${esc(k)}: ${esc(v)}`).join('<br>')}`;
+  const msgs=data.messages||[];
+  if(data.reset || data.offset===0){messagesEl.innerHTML=msgs.map(messageHtml).join('')}else if(msgs.length){messagesEl.insertAdjacentHTML('beforeend', msgs.map(messageHtml).join(''))}
+  messageCount=data.count??(messageCount+msgs.length); emptyEl.classList.toggle('hidden', messageCount>0);
+  if(!usageLoaded) usagePop.innerHTML='点击 Token 后计算';
 }
-async function poll(){try{const r=await fetch('/api/state'); render(await r.json());}catch(e){document.getElementById('status').textContent='连接失败';}setTimeout(poll,isRunning?900:1800)}
+async function poll(){try{const r=await fetch('/api/state?since='+encodeURIComponent(lastUpdated)+'&after='+encodeURIComponent(messageCount)); const data=await r.json(); if(data.unchanged){isRunning=data.running;messageCount=data.count??messageCount;document.getElementById('status').textContent=isRunning?'运行中':'空闲';runBtn.textContent=isRunning?'结束进程':'运行';runBtn.classList.toggle('stop',isRunning);drop.classList.toggle('hidden',isRunning)}else{lastUpdated=data.updated||0;usageLoaded=false;render(data)}}catch(e){document.getElementById('status').textContent='连接失败';}setTimeout(poll,isRunning?900:1800)}
 function addFiles(files){const incoming=[...files].filter(Boolean);if(incoming.length){selectedFiles.push(...incoming);refreshFiles()}}
 function refreshFiles(){filesEl.innerHTML=selectedFiles.map((f,i)=>`<span class="file">${esc(f.name)} <button type="button" data-i="${i}">x</button></span>`).join('')}
 drop.addEventListener('click',e=>{if(e.target===drop)fileInput.click()});
@@ -227,7 +299,7 @@ drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('drag'
 drop.addEventListener('paste',e=>{const files=[...e.clipboardData.files];if(files.length){e.preventDefault();addFiles(files)}});
 fileInput.addEventListener('change',()=>{addFiles(fileInput.files);fileInput.value=''});
 filesEl.addEventListener('click',e=>{if(e.target.dataset.i){selectedFiles.splice(Number(e.target.dataset.i),1);refreshFiles()}});
-usage.querySelector('button').addEventListener('click',()=>usage.classList.toggle('open'));
+usage.querySelector('button').addEventListener('click',async()=>{usage.classList.toggle('open');if(usage.classList.contains('open')&&!usageLoaded){usagePop.innerHTML='计算中...';const r=await fetch('/api/usage');const data=await r.json();const by=data.usage?.by_role||{};usagePop.innerHTML=`<strong>估算总量：${esc(data.usage?.estimated_total||0)}</strong><br>${Object.entries(by).map(([k,v])=>`${esc(k)}: ${esc(v)}`).join('<br>')}`;usageLoaded=true}});
 runBtn.addEventListener('click',async e=>{if(isRunning){e.preventDefault();await fetch('/api/stop',{method:'POST'});return}});
 composer.addEventListener('submit',async e=>{e.preventDefault();if(isRunning)return;const fd=new FormData();fd.append('message',msgInput.value);selectedFiles.forEach(f=>fd.append('files',f,f.name));const r=await fetch('/api/send',{method:'POST',body:fd});if(r.ok){msgInput.value='';selectedFiles=[];refreshFiles();drop.classList.add('hidden');poll()}else alert(await r.text())});
 poll();
@@ -259,9 +331,39 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self):
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
         if path == "/api/state":
-            return self.send_json(state_payload())
+            qs = parse_qs(parsed.query)
+            since = None
+            after = None
+            try:
+                since = float(qs.get("since", [""])[0])
+            except ValueError:
+                pass
+            try:
+                after = int(qs.get("after", [""])[0])
+            except ValueError:
+                pass
+            return self.send_json(state_payload(light_if_unchanged=True, since=since, after=after))
+        if path == "/api/usage":
+            return self.send_json(usage_payload())
+        if path == "/api/blob":
+            key = parse_qs(parsed.query).get("id", [""])[0]
+            data_url = _blob_cache.get(key)
+            if not data_url:
+                return self.send_error(404)
+            m = re.match(r"data:([^;]+);base64,(.*)", data_url, re.S)
+            if not m:
+                return self.send_error(400)
+            raw = base64.b64decode(re.sub(r"\s+", "", m.group(2)))
+            self.send_response(200)
+            self.send_header("Content-Type", m.group(1))
+            self.send_header("Cache-Control", "max-age=3600")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return
         if path in ("/", "/index.html"):
             return self.send_text(PAGE, content_type="text/html; charset=utf-8")
         self.send_error(404)

@@ -216,7 +216,7 @@ PAGE = r"""
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>input.json 查看器</title>
 <style>
-:root{color-scheme:light;--bg:#f7f7f4;--panel:#ffffff;--text:#202124;--muted:#62676f;--line:#d8dadd;--accent:#0f766e;--danger:#b42318;--tool:#eef2f6;--user:#e8f3ee;--assistant:#fff;--system:#f4efe6}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}.app{min-height:100vh;padding:16px 16px 150px}.top{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:12px;padding:10px 12px;margin:-16px -16px 14px;background:rgba(247,247,244,.92);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}h1{font-size:17px;margin:0;font-weight:650}.pill{border:1px solid var(--line);background:#fff;border-radius:999px;padding:5px 10px;color:var(--muted);font-size:12px}.usage{margin-left:auto;position:relative}.usage button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 10px;color:var(--text);cursor:pointer}.usage-pop{display:none;position:absolute;right:0;top:36px;width:230px;background:#fff;border:1px solid var(--line);box-shadow:0 12px 35px rgba(0,0,0,.12);border-radius:8px;padding:10px}.usage.open .usage-pop{display:block}.messages{max-width:980px;margin:0 auto;display:flex;flex-direction:column;gap:10px}.msg{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:10px 12px}.msg.user{background:var(--user)}.msg.system{background:var(--system)}.role{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--muted);font-size:12px;margin-bottom:6px;text-transform:uppercase;letter-spacing:0}.content{overflow-wrap:anywhere}.content p{margin:0 0 8px}.content p:last-child{margin-bottom:0}.content h1,.content h2,.content h3{margin:10px 0 6px;line-height:1.25}.content h1{font-size:22px}.content h2{font-size:18px}.content h3{font-size:16px}.content ul,.content ol{margin:6px 0 8px 22px;padding:0}.content blockquote{margin:8px 0;padding:6px 10px;border-left:3px solid var(--line);background:#fafafa;color:#4f5660}.content pre{margin:8px 0;padding:10px;overflow:auto;background:#1f2328;color:#f6f8fa;border-radius:6px}.content code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px}.content :not(pre)>code{background:#eef2f6;border-radius:4px;padding:1px 4px}.content img{display:block;max-width:min(100%,560px);max-height:520px;border:1px solid var(--line);border-radius:6px;margin:8px 0;background:#fff}.tool-summary{background:var(--tool);color:#49515a;border-radius:6px;padding:8px 10px;font-size:13px}.tools{display:flex;flex-direction:column;gap:6px;margin-top:8px}.composer{position:fixed;left:0;right:0;bottom:0;background:rgba(247,247,244,.95);backdrop-filter:blur(10px);border-top:1px solid var(--line);padding:12px}.composer-inner{max-width:980px;margin:0 auto;display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}.drop{border:1px solid var(--line);background:#fff;border-radius:8px;padding:8px}.drop.drag{outline:2px solid var(--accent)}textarea{width:100%;min-height:58px;max-height:180px;resize:vertical;border:0;outline:0;font:inherit}.files{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}.file{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:3px 8px;background:#fafafa}.file button{border:0;background:transparent;cursor:pointer;color:var(--muted)}button.run{height:42px;border:0;border-radius:8px;padding:0 18px;background:var(--accent);color:#fff;font-weight:650;cursor:pointer;min-width:94px}button.stop{background:var(--danger)}.hidden{display:none}.empty{max-width:980px;margin:40px auto;color:var(--muted);text-align:center}@media(max-width:700px){.app{padding-left:10px;padding-right:10px}.composer-inner{grid-template-columns:1fr}.usage-pop{right:-6px}.top{gap:8px}.pill{display:none}}
+:root{color-scheme:light;--bg:#f7f7f4;--panel:#ffffff;--text:#202124;--muted:#62676f;--line:#d8dadd;--accent:#0f766e;--danger:#b42318;--tool:#eef2f6;--user:#e8f3ee;--assistant:#fff;--system:#f4efe6}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}.app{min-height:100vh;padding:16px 16px 150px}.top{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:12px;padding:10px 12px;margin:-16px -16px 14px;background:rgba(247,247,244,.92);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}h1{font-size:17px;margin:0;font-weight:650}.pill{border:1px solid var(--line);background:#fff;border-radius:999px;padding:5px 10px;color:var(--muted);font-size:12px}.usage{margin-left:auto;position:relative}.usage button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 10px;color:var(--text);cursor:pointer}.usage-pop{display:none;position:absolute;right:0;top:36px;width:230px;background:#fff;border:1px solid var(--line);box-shadow:0 12px 35px rgba(0,0,0,.12);border-radius:8px;padding:10px}.usage.open .usage-pop{display:block}.messages{max-width:980px;margin:0 auto;display:flex;flex-direction:column;gap:10px}.msg{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:10px 12px}.msg.user{background:var(--user)}.msg.system{background:var(--system)}.role{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--muted);font-size:12px;margin-bottom:6px;text-transform:uppercase;letter-spacing:0}.content{overflow-wrap:anywhere}.content p{margin:0 0 8px}.content p:last-child{margin-bottom:0}.content h1,.content h2,.content h3,.content h4,.content h5,.content h6{margin:10px 0 6px;line-height:1.25}.content h1{font-size:22px}.content h2{font-size:18px}.content h3{font-size:16px}.content h4{font-size:15px}.content h5{font-size:14px}.content h6{font-size:13px;color:var(--muted)}.content ul,.content ol{margin:6px 0 8px 22px;padding:0}.content li>ul,.content li>ol{margin-top:4px;margin-bottom:4px}.content table{border-collapse:collapse;margin:8px 0;width:max-content;max-width:100%;display:block;overflow:auto}.content th,.content td{border:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top}.content th{background:#f1f3f5;font-weight:650}.content tr:nth-child(even) td{background:#fafafa}.content blockquote{margin:8px 0;padding:6px 10px;border-left:3px solid var(--line);background:#fafafa;color:#4f5660}.content pre{margin:8px 0;padding:10px;overflow:auto;background:#1f2328;color:#f6f8fa;border-radius:6px}.content code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px}.content :not(pre)>code{background:#eef2f6;border-radius:4px;padding:1px 4px}.content img{display:block;max-width:min(100%,560px);max-height:520px;border:1px solid var(--line);border-radius:6px;margin:8px 0;background:#fff}.tool-summary{background:var(--tool);color:#49515a;border-radius:6px;padding:8px 10px;font-size:13px}.tools{display:flex;flex-direction:column;gap:6px;margin-top:8px}.composer{position:fixed;left:0;right:0;bottom:0;background:rgba(247,247,244,.95);backdrop-filter:blur(10px);border-top:1px solid var(--line);padding:12px}.composer-inner{max-width:980px;margin:0 auto;display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}.drop{border:1px solid var(--line);background:#fff;border-radius:8px;padding:8px}.drop.drag{outline:2px solid var(--accent)}textarea{width:100%;min-height:58px;max-height:180px;resize:vertical;border:0;outline:0;font:inherit}.files{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}.file{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:3px 8px;background:#fafafa}.file button{border:0;background:transparent;cursor:pointer;color:var(--muted)}button.run{height:42px;border:0;border-radius:8px;padding:0 18px;background:var(--accent);color:#fff;font-weight:650;cursor:pointer;min-width:94px}button.stop{background:var(--danger)}.hidden{display:none}.empty{max-width:980px;margin:40px auto;color:var(--muted);text-align:center}@media(max-width:700px){.app{padding-left:10px;padding-right:10px}.composer-inner{grid-template-columns:1fr}.usage-pop{right:-6px}.top{gap:8px}.pill{display:none}}
 </style>
 </head>
 <body>
@@ -240,29 +240,53 @@ function inlineMd(text){
 }
 function markdown(text){
   const lines=String(text??'').replace(/\r\n/g,'\n').split('\n');
-  let html='', list=null, para=[], code=false, codeLines=[];
+  let html='', para=[], code=false, codeLines=[], listStack=[];
   const flushPara=()=>{if(para.length){html+=`<p>${inlineMd(para.join(' '))}</p>`;para=[]}};
-  const closeList=()=>{if(list){html+=`</${list}>`;list=null}};
-  for(const line of lines){
+  const closeLists=(to=0)=>{while(listStack.length>to){const it=listStack.pop();html+=`</li></${it.type}>`}};
+  const listDepth=indent=>Math.floor(indent.replace(/\t/g,'    ').length/2);
+  const openList=(type,depth,item)=>{
+    flushPara();
+    while(listStack.length>depth+1) closeLists(listStack.length-1);
+    if(listStack.length===depth+1 && listStack[depth].type!==type) closeLists(depth);
+    if(listStack.length<depth+1){html+=`<${type}>`;listStack.push({type,openLi:false})}
+    const cur=listStack[listStack.length-1];
+    if(cur.openLi) html+='</li>';
+    html+=`<li>${inlineMd(item)}`;
+    cur.openLi=true;
+  };
+  const isTableSep=s=>/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(s);
+  const splitRow=s=>s.trim().replace(/^\|/,'').replace(/\|$/,'').split('|').map(x=>x.trim());
+  const tableAt=i=>i+1<lines.length && lines[i].includes('|') && isTableSep(lines[i+1]);
+  const readTable=i=>{
+    const head=splitRow(lines[i]); let j=i+2, rows=[];
+    while(j<lines.length && lines[j].trim() && lines[j].includes('|') && !/^```/.test(lines[j])) rows.push(splitRow(lines[j++]));
+    let out='<table><thead><tr>'+head.map(c=>`<th>${inlineMd(c)}</th>`).join('')+'</tr></thead>';
+    if(rows.length) out+='<tbody>'+rows.map(r=>'<tr>'+head.map((_,k)=>`<td>${inlineMd(r[k]||'')}</td>`).join('')+'</tr>').join('')+'</tbody>';
+    return [out+'</table>', j];
+  };
+  for(let i=0;i<lines.length;i++){
+    const line=lines[i];
     const fence=line.match(/^```/);
     if(fence){
-      if(code){html+=`<pre><code>${esc(codeLines.join('\n'))}</code></pre>`;code=false;codeLines=[]}else{flushPara();closeList();code=true}
+      if(code){html+=`<pre><code>${esc(codeLines.join('\n'))}</code></pre>`;code=false;codeLines=[]}else{flushPara();closeLists();code=true}
       continue;
     }
     if(code){codeLines.push(line);continue}
-    if(!line.trim()){flushPara();closeList();continue}
-    let m=line.match(/^(#{1,3})\s+(.+)$/);
-    if(m){flushPara();closeList();html+=`<h${m[1].length}>${inlineMd(m[2])}</h${m[1].length}>`;continue}
+    if(!line.trim()){flushPara();closeLists();continue}
+    if(tableAt(i)){flushPara();closeLists();const r=readTable(i);html+=r[0];i=r[1]-1;continue}
+    let m=line.match(/^(#{1,6})\s+(.+)$/);
+    if(m){flushPara();closeLists();html+=`<h${m[1].length}>${inlineMd(m[2])}</h${m[1].length}>`;continue}
     m=line.match(/^>\s?(.+)$/);
-    if(m){flushPara();closeList();html+=`<blockquote>${inlineMd(m[1])}</blockquote>`;continue}
-    m=line.match(/^[-*+]\s+(.+)$/);
-    if(m){flushPara();if(list!=='ul'){closeList();html+='<ul>';list='ul'}html+=`<li>${inlineMd(m[1])}</li>`;continue}
-    m=line.match(/^\d+[.)]\s+(.+)$/);
-    if(m){flushPara();if(list!=='ol'){closeList();html+='<ol>';list='ol'}html+=`<li>${inlineMd(m[1])}</li>`;continue}
+    if(m){flushPara();closeLists();html+=`<blockquote>${inlineMd(m[1])}</blockquote>`;continue}
+    m=line.match(/^(\s*)([-*+])\s+(.+)$/);
+    if(m){openList('ul',listDepth(m[1]),m[3]);continue}
+    m=line.match(/^(\s*)\d+[.)]\s+(.+)$/);
+    if(m){openList('ol',listDepth(m[1]),m[2]);continue}
+    closeLists();
     para.push(line.trim());
   }
   if(code) html+=`<pre><code>${esc(codeLines.join('\n'))}</code></pre>`;
-  flushPara();closeList();
+  flushPara();closeLists();
   return html;
 }
 function contentHtml(content){
@@ -387,8 +411,14 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     os.chdir(ROOT)
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
-    url = f"http://{HOST}:{PORT}"
+    port = PORT
+    while True:
+        try:
+            server = ThreadingHTTPServer((HOST, port), Handler)
+            break
+        except OSError:
+            port += 1
+    url = f"http://{HOST}:{port}"
     if sys.stdout:
         print(f"input.json viewer: {url}")
     threading.Timer(0.3, lambda: webbrowser.open(url)).start()

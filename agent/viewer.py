@@ -4,6 +4,7 @@ import mimetypes
 import os
 import re
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -411,13 +412,17 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     os.chdir(ROOT)
+
+    def port_is_free(port):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.2)
+            return s.connect_ex((HOST, port)) != 0
+
     port = PORT
-    while True:
-        try:
-            server = ThreadingHTTPServer((HOST, port), Handler)
-            break
-        except OSError:
-            port += 1
+    while not port_is_free(port):
+        port += 1
+
+    server = ThreadingHTTPServer((HOST, port), Handler)
     url = f"http://{HOST}:{port}"
     if sys.stdout:
         print(f"input.json viewer: {url}")

@@ -1,2 +1,0 @@
-python viewer.py
-pause

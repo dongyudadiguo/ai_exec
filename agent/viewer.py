@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import threading
+import webbrowser
 from email.parser import BytesParser
 from email.policy import default
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -238,7 +239,8 @@ poll();
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
-        sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
+        if sys.stderr:
+            sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
 
     def send_json(self, obj, status=200):
         raw = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -284,7 +286,10 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     os.chdir(ROOT)
     server = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(f"input.json viewer: http://{HOST}:{PORT}")
+    url = f"http://{HOST}:{PORT}"
+    if sys.stdout:
+        print(f"input.json viewer: {url}")
+    threading.Timer(0.3, lambda: webbrowser.open(url)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -11,7 +11,7 @@
     "messages": [
       {
         "role": "system",
-        "content": "Proactively use Python for any task; cautious by default\nCheck the `skills` folder, update and use it to avoid reinventing the wheel\nYou are called from `ae.py`"
+        "content": "Proactively use Python for any task; Keep the code for tool calls minimal, unless you are creating **reusable tools**; You are called using the command: `python ae.py input.json`"
       }
     ],
     "tools": [

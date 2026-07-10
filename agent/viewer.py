@@ -41,12 +41,61 @@ def running():
         return _process is not None and _process.poll() is None
 
 
+def agent_python():
+    """Prefer pythonw so ae.py tool children (sys.executable -c) do not open consoles."""
+    exe = Path(sys.executable)
+    if os.name == "nt":
+        candidate = exe.with_name("pythonw.exe")
+        if candidate.exists():
+            return str(candidate)
+        # common layout: .../Python3xx/python.exe
+        sibling = exe.parent / "pythonw.exe"
+        if sibling.exists():
+            return str(sibling)
+    return str(exe)
+
+
+def noconsole_site_dir():
+    return ROOT / "noconsole_site"
+
+
+def prepend_pythonpath(env, path):
+    """Ensure sitecustomize is importable for ae.py and every python -c tool child."""
+    path = str(path)
+    current = env.get("PYTHONPATH", "")
+    parts = [p for p in current.split(os.pathsep) if p]
+    if path not in parts:
+        env["PYTHONPATH"] = path + (os.pathsep + current if current else "")
+    return env
+
+
 def start_process():
     global _process
     with _process_lock:
         if _process is not None and _process.poll() is None:
             return False
-        _process = subprocess.Popen([sys.executable, str(AE_FILE), str(INPUT_FILE)], cwd=str(ROOT))
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0
+        env = os.environ.copy()
+        # Lets compaction children stop this runner without editing ae.py.
+        env["AE_RUNNER"] = "1"
+        # Patch subprocess in this process tree so tool calls do not flash consoles.
+        prepend_pythonpath(env, noconsole_site_dir())
+        # Prefer pythonw; also hide window if a console python is the only option.
+        startupinfo = None
+        if os.name == "nt":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0
+        _process = subprocess.Popen(
+            [agent_python(), str(AE_FILE), str(INPUT_FILE)],
+            cwd=str(ROOT),
+            creationflags=creationflags,
+            env=env,
+            startupinfo=startupinfo,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         return True
 
 
@@ -175,7 +224,13 @@ def load_cached():
     mtime = st.st_mtime
     with _state_cache_lock:
         if _state_cache["mtime"] != mtime or _state_cache["messages"] is None:
-            data = read_input()
+            try:
+                data = read_input()
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError, KeyError):
+                # ae.py rewrites input.json in place; a concurrent read can see a partial file.
+                if _state_cache["messages"] is not None:
+                    return _state_cache["mtime"], _state_cache["model"], _state_cache["messages"]
+                raise
             body = data.get("json", {})
             messages = body.get("messages", [])
             _state_cache.update({"mtime": mtime, "messages": messages, "model": body.get("model", ""), "usage": None})
@@ -230,6 +285,7 @@ PAGE = r"""
 <script>
 const messagesEl=document.getElementById('messages'), emptyEl=document.getElementById('empty'), composer=document.getElementById('composer'), runBtn=document.getElementById('run'), msgInput=document.getElementById('message'), fileInput=document.getElementById('fileInput'), drop=document.getElementById('drop'), filesEl=document.getElementById('files'), usage=document.getElementById('usage'), usagePop=document.getElementById('usagePop');
 let selectedFiles=[], isRunning=false, lastUpdated=0, messageCount=0, usageLoaded=false;
+let pollTimer=null, pollInFlight=false, pollQueued=false;
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function inlineMd(text){
   return esc(text)
@@ -300,21 +356,96 @@ function contentHtml(content){
   return out;
 }
 function imageHtml(src){return `<img src="${esc(src)}" alt="attached image">`;}
+function hasVisibleContent(content){
+  if(content==null) return false;
+  if(Array.isArray(content)) return content.some(part=>part?.type==='image_url' || String(part?.text??'').trim());
+  return String(content).trim().length>0;
+}
 function toolSummary(m){
-  if(m.role==='tool') return `<div class="msg"><div class="role">TOOL</div><div class="tool-summary">工具结果已返回，${esc(String(m.content||'').length)} 字符</div></div>`;
+  if(m.role==='tool') return `<div class="msg"><div class="role">TOOL</div><div class="tool-summary">工具结果已返回，${esc(String(m.tool_content_length??String(m.content||'').length))} 字符</div></div>`;
   if(m.tool_calls?.length) return `<div class="tools">${m.tool_calls.map(c=>`<div class="tool-summary">调用工具：${esc(c.function?.name||'python')}</div>`).join('')}</div>`;
   return '';
 }
-function messageHtml(m){return m.role==='tool'?toolSummary(m):`<article class="msg ${esc(m.role||'')}"><div class="role"><span>${esc(m.role||'message')}</span></div>${contentHtml(m.content)}${toolSummary(m)}</article>`}
-function render(data){
-  isRunning=data.running; document.getElementById('model').textContent=data.model||'model'; document.getElementById('status').textContent=isRunning?'运行中':'空闲';
-  drop.classList.toggle('hidden', isRunning); runBtn.textContent=isRunning?'结束进程':'运行'; runBtn.classList.toggle('stop', isRunning);
+function messageHtml(m){
+  if(m.role==='tool') return toolSummary(m);
+  const body=hasVisibleContent(m.content)?contentHtml(m.content):'';
+  const tools=toolSummary(m);
+  if(!body && !tools) return '';
+  return `<article class="msg ${esc(m.role||'')}"><div class="role"><span>${esc(m.role||'message')}</span></div>${body}${tools}</article>`;
+}
+function setRunningUi(){
+  document.getElementById('status').textContent=isRunning?'运行中':'空闲';
+  drop.classList.toggle('hidden', isRunning);
+  runBtn.textContent=isRunning?'结束进程':'运行';
+  runBtn.classList.toggle('stop', isRunning);
+}
+function applyMessages(data){
   const msgs=data.messages||[];
-  if(data.reset || data.offset===0){messagesEl.innerHTML=msgs.map(messageHtml).join('')}else if(msgs.length){messagesEl.insertAdjacentHTML('beforeend', msgs.map(messageHtml).join(''))}
-  messageCount=data.count??(messageCount+msgs.length); emptyEl.classList.toggle('hidden', messageCount>0);
+  const count=data.count??messageCount;
+  const offset=data.offset??0;
+  // Full replace on reset, first paint, or any desync that cannot be appended safely.
+  if(data.reset || offset===0 || messageCount===0){
+    messagesEl.innerHTML=msgs.map(messageHtml).join('');
+    messageCount=count;
+    return;
+  }
+  if(offset===messageCount){
+    if(msgs.length) messagesEl.insertAdjacentHTML('beforeend', msgs.map(messageHtml).join(''));
+    messageCount=count;
+    return;
+  }
+  // Overlapping delta from a raced poll: keep only the unseen suffix.
+  if(offset<messageCount && offset+msgs.length>=messageCount){
+    const fresh=msgs.slice(messageCount-offset);
+    if(fresh.length) messagesEl.insertAdjacentHTML('beforeend', fresh.map(messageHtml).join(''));
+    messageCount=count;
+    return;
+  }
+  // History rewrote behind us (compaction/edit). Force a clean resync next tick.
+  messageCount=0;
+  lastUpdated=0;
+  schedulePoll(0);
+}
+function render(data){
+  isRunning=!!data.running;
+  document.getElementById('model').textContent=data.model||'model';
+  setRunningUi();
+  applyMessages(data);
+  emptyEl.classList.toggle('hidden', messageCount>0);
   if(!usageLoaded) usagePop.innerHTML='点击 Token 后计算';
 }
-async function poll(){try{const r=await fetch('/api/state?since='+encodeURIComponent(lastUpdated)+'&after='+encodeURIComponent(messageCount)); const data=await r.json(); if(data.unchanged){isRunning=data.running;messageCount=data.count??messageCount;document.getElementById('status').textContent=isRunning?'运行中':'空闲';runBtn.textContent=isRunning?'结束进程':'运行';runBtn.classList.toggle('stop',isRunning);drop.classList.toggle('hidden',isRunning)}else{lastUpdated=data.updated||0;usageLoaded=false;render(data)}}catch(e){document.getElementById('status').textContent='连接失败';}setTimeout(poll,isRunning?900:1800)}
+function schedulePoll(delay){
+  if(pollTimer!=null) clearTimeout(pollTimer);
+  pollTimer=setTimeout(poll, delay);
+}
+async function poll(){
+  if(pollInFlight){pollQueued=true;return;}
+  pollInFlight=true;
+  pollTimer=null;
+  try{
+    const r=await fetch('/api/state?since='+encodeURIComponent(lastUpdated)+'&after='+encodeURIComponent(messageCount));
+    const data=await r.json();
+    if(data.unchanged){
+      isRunning=!!data.running;
+      if(data.count!=null && data.count<messageCount){
+        // Transcript shrank (compaction): full resync.
+        messageCount=0; lastUpdated=0; schedulePoll(0); return;
+      }
+      if(data.count!=null) messageCount=data.count;
+      setRunningUi();
+    }else{
+      lastUpdated=data.updated||0;
+      usageLoaded=false;
+      render(data);
+    }
+  }catch(e){
+    document.getElementById('status').textContent='连接失败';
+  }finally{
+    pollInFlight=false;
+    if(pollQueued){pollQueued=false;schedulePoll(0);} 
+    else schedulePoll(isRunning?900:1800);
+  }
+}
 function addFiles(files){const incoming=[...files].filter(Boolean);if(incoming.length){selectedFiles.push(...incoming);refreshFiles()}}
 function refreshFiles(){filesEl.innerHTML=selectedFiles.map((f,i)=>`<span class="file">${esc(f.name)} <button type="button" data-i="${i}">x</button></span>`).join('')}
 drop.addEventListener('click',e=>{if(e.target===drop)fileInput.click()});
@@ -325,9 +456,9 @@ drop.addEventListener('paste',e=>{const files=[...e.clipboardData.files];if(file
 fileInput.addEventListener('change',()=>{addFiles(fileInput.files);fileInput.value=''});
 filesEl.addEventListener('click',e=>{if(e.target.dataset.i){selectedFiles.splice(Number(e.target.dataset.i),1);refreshFiles()}});
 usage.querySelector('button').addEventListener('click',async()=>{usage.classList.toggle('open');if(usage.classList.contains('open')&&!usageLoaded){usagePop.innerHTML='计算中...';const r=await fetch('/api/usage');const data=await r.json();const by=data.usage?.by_role||{};usagePop.innerHTML=`<strong>估算总量：${esc(data.usage?.estimated_total||0)}</strong><br>${Object.entries(by).map(([k,v])=>`${esc(k)}: ${esc(v)}`).join('<br>')}`;usageLoaded=true}});
-runBtn.addEventListener('click',async e=>{if(isRunning){e.preventDefault();await fetch('/api/stop',{method:'POST'});return}});
-composer.addEventListener('submit',async e=>{e.preventDefault();if(isRunning)return;const fd=new FormData();fd.append('message',msgInput.value);selectedFiles.forEach(f=>fd.append('files',f,f.name));const r=await fetch('/api/send',{method:'POST',body:fd});if(r.ok){msgInput.value='';selectedFiles=[];refreshFiles();drop.classList.add('hidden');poll()}else alert(await r.text())});
-poll();
+runBtn.addEventListener('click',async e=>{if(isRunning){e.preventDefault();await fetch('/api/stop',{method:'POST'});schedulePoll(0);return}});
+composer.addEventListener('submit',async e=>{e.preventDefault();if(isRunning)return;const fd=new FormData();fd.append('message',msgInput.value);selectedFiles.forEach(f=>fd.append('files',f,f.name));const r=await fetch('/api/send',{method:'POST',body:fd});if(r.ok){msgInput.value='';selectedFiles=[];refreshFiles();drop.classList.add('hidden');isRunning=true;setRunningUi();schedulePoll(0)}else alert(await r.text())});
+schedulePoll(0);
 </script>
 </body>
 </html>

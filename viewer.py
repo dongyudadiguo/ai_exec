@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parent
-INPUT_FILE = ROOT / "../input.json"
+INPUT_FILE = ROOT / "input.json"
 AE_FILE = ROOT / "ae.py"
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("AE_VIEWER_PORT", "8765"))

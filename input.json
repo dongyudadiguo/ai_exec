@@ -5,7 +5,8 @@
     "Content-Type": "application/json"
   },
   "json": {
-    "model": "gpt-5.5",
+    "model": "deepseek-v4-pro",
+    "reasoning_effort": "max",
     "stream": false,
     "messages": [
       {

@@ -41,6 +41,81 @@ def running():
         return _process is not None and _process.poll() is None
 
 
+def pending_tool_progress(messages):
+    """Return (done, total) for the latest assistant tool group, or None."""
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.get("role") != "assistant" or not message.get("tool_calls"):
+            continue
+        call_ids = []
+        for call in message.get("tool_calls") or []:
+            call_id = call.get("id")
+            if call_id:
+                call_ids.append(call_id)
+        if not call_ids:
+            return 0, 0
+        done = set()
+        for item in messages[index + 1 :]:
+            if item.get("role") != "tool":
+                # A later non-tool message means this group is already complete history.
+                return None
+            call_id = item.get("tool_call_id")
+            if call_id in call_ids:
+                done.add(call_id)
+        return len(done), len(call_ids)
+    return None
+
+
+def runner_phase(messages, is_running):
+    """Classify runner wait state from transcript shape.
+
+    ae.py flow while alive:
+    - POST model request  -> waiting_ai
+    - run each tool child -> waiting_tool
+    - after all tool results are written, loop back to POST -> waiting_ai
+    """
+    if not is_running:
+        return {
+            "phase": "idle",
+            "label": "空闲",
+            "tool_done": None,
+            "tool_total": None,
+        }
+
+    progress = pending_tool_progress(messages)
+    if progress is not None:
+        done, total = progress
+        if total == 0 or done < total:
+            label = "等待工具" if total == 0 else f"等待工具 {done}/{total}"
+            return {
+                "phase": "waiting_tool",
+                "label": label,
+                "tool_done": done,
+                "tool_total": total,
+            }
+        return {
+            "phase": "waiting_ai",
+            "label": "等待 AI",
+            "tool_done": done,
+            "tool_total": total,
+        }
+
+    if messages and messages[-1].get("role") == "assistant" and not messages[-1].get("tool_calls"):
+        return {
+            "phase": "finishing",
+            "label": "即将结束",
+            "tool_done": None,
+            "tool_total": None,
+        }
+
+    return {
+        "phase": "waiting_ai",
+        "label": "等待 AI",
+        "tool_done": None,
+        "tool_total": None,
+    }
+
+
 def agent_python():
     """Prefer pythonw so ae.py tool children (sys.executable -c) do not open consoles."""
     exe = Path(sys.executable)
@@ -240,8 +315,15 @@ def load_cached():
 def state_payload(light_if_unchanged=False, since=None, after=None):
     mtime, model, messages = load_cached()
     is_running = running()
+    phase = runner_phase(messages, is_running)
     if light_if_unchanged and since is not None and mtime <= since:
-        return {"unchanged": True, "running": is_running, "updated": mtime, "count": len(messages)}
+        return {
+            "unchanged": True,
+            "running": is_running,
+            "updated": mtime,
+            "count": len(messages),
+            **phase,
+        }
     reset = after is None or after < 0 or after > len(messages)
     selected = messages if reset else messages[after:]
     return {
@@ -252,6 +334,7 @@ def state_payload(light_if_unchanged=False, since=None, after=None):
         "count": len(messages),
         "offset": 0 if reset else after,
         "reset": reset,
+        **phase,
     }
 
 
@@ -284,7 +367,7 @@ PAGE = r"""
 <form id="composer" class="composer"><div class="composer-inner"><div id="drop" class="drop"><textarea id="message" name="message" placeholder="输入消息，或拖入/粘贴文件、图片"></textarea><div id="files" class="files"></div><input id="fileInput" name="files" type="file" multiple class="hidden"></div><button id="run" class="run" type="submit">运行</button></div></form>
 <script>
 const messagesEl=document.getElementById('messages'), emptyEl=document.getElementById('empty'), composer=document.getElementById('composer'), runBtn=document.getElementById('run'), msgInput=document.getElementById('message'), fileInput=document.getElementById('fileInput'), drop=document.getElementById('drop'), filesEl=document.getElementById('files'), usage=document.getElementById('usage'), usagePop=document.getElementById('usagePop');
-let selectedFiles=[], isRunning=false, lastUpdated=0, messageCount=0, usageLoaded=false;
+let selectedFiles=[], isRunning=false, phaseLabel='空闲', lastUpdated=0, messageCount=0, usageLoaded=false;
 let pollTimer=null, pollInFlight=false, pollQueued=false;
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function inlineMd(text){
@@ -374,7 +457,7 @@ function messageHtml(m){
   return `<article class="msg ${esc(m.role||'')}"><div class="role"><span>${esc(m.role||'message')}</span></div>${body}${tools}</article>`;
 }
 function setRunningUi(){
-  document.getElementById('status').textContent=isRunning?'运行中':'空闲';
+  document.getElementById('status').textContent=isRunning?(phaseLabel||'运行中'):'空闲';
   drop.classList.toggle('hidden', isRunning);
   runBtn.textContent=isRunning?'结束进程':'运行';
   runBtn.classList.toggle('stop', isRunning);
@@ -408,6 +491,7 @@ function applyMessages(data){
 }
 function render(data){
   isRunning=!!data.running;
+  phaseLabel=data.label||(isRunning?'运行中':'空闲');
   document.getElementById('model').textContent=data.model||'model';
   setRunningUi();
   applyMessages(data);
@@ -427,6 +511,7 @@ async function poll(){
     const data=await r.json();
     if(data.unchanged){
       isRunning=!!data.running;
+      phaseLabel=data.label||(isRunning?'运行中':'空闲');
       if(data.count!=null && data.count<messageCount){
         // Transcript shrank (compaction): full resync.
         messageCount=0; lastUpdated=0; schedulePoll(0); return;
@@ -443,7 +528,7 @@ async function poll(){
   }finally{
     pollInFlight=false;
     if(pollQueued){pollQueued=false;schedulePoll(0);} 
-    else schedulePoll(isRunning?900:1800);
+    else schedulePoll(isRunning?500:1800);
   }
 }
 function addFiles(files){const incoming=[...files].filter(Boolean);if(incoming.length){selectedFiles.push(...incoming);refreshFiles()}}

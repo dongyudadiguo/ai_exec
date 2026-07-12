@@ -10,11 +10,7 @@
     "messages": [
       {
         "role": "system",
-        "content": "Proactively use Python for any task; You are called using the command: `python ae.py input.json`"
-      },
-      {
-        "role": "system",
-        "content": "Keep the code for tool calls minimal, unless you are creating **reusable tools**"
+        "content": "Proactively use Python for any task; Keep the code for tool calls minimal, unless you are creating **reusable tools**; user run `./view.vbs` to view the content and call you"
       }
     ],
     "tools": [

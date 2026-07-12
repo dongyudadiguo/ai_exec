@@ -1,38 +1,38 @@
 {
-  "url": "https://uuapi.net/v1/responses",
+  "url": "https://api.deepseek.com/v1/chat/completions",
   "headers": {
-    "Authorization": "Bearer sk-ecf7d70c71c8df2063f0045ef2efbeadf962f243f45db132e5eb5796de123b6f",
+    "Authorization": "Bearer sk-xxx",
     "Content-Type": "application/json"
   },
   "json": {
-    "model": "gpt-5.6-sol",
-    "reasoning": {
-      "effort": "max" 
-    },
+    "model": "gpt-5.5",
+    "stream": false,
+    "messages": [
+      {
+        "role": "system",
+        "content": "Proactively use Python for any task; Keep the code for tool calls minimal, unless you are creating **reusable tools**; user run `./view.vbs` to view the content and call you"
+      }
+    ],
     "tools": [
       {
         "type": "function",
-        "name": "python",
-        "description": "Execute Python code",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "code": { "type": "string" }
-          },
-          "required": ["code"]
-        },
-        "strict": true
+        "function": {
+          "name": "python",
+          "description": "Execute Python code",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ]
+          }
+        }
       }
     ],
-    "input": [
-      {
-        "role": "developer",
-        "content": "Proactively use Python for any task; Keep the code for tool calls minimal, unless you are creating **reusable tools**; user run `./view.vbs` to view the content and call you"
-      },
-      {
-        "role": "user",
-        "content": "..."
-      }
-    ]
+    "parallel_tool_calls": false
   }
 }

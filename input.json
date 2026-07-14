@@ -11,7 +11,7 @@
     "messages": [
       {
         "role": "system",
-        "content": "Proactively use Python for any task; Good at finding and using tools; user run `./view.vbs` to view the content and call you"
+        "content": "Proactively use Python for any task; check `./skills`; user run `./view.vbs` to view the content and call you"
       }
     ],
     "tools": [

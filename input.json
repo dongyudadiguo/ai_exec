@@ -1,12 +1,14 @@
 {
-  "url": "https://api.deepseek.com/v1/responses",
+  "url": "https://uuapi.net/v1/responses",
   "headers": {
-    "Authorization": "Bearer sk-xxx",
+    "Authorization": "Bearer sk-5b28edd972c8b55a3c37f7838ad317ca7efc8772e4bac8ac4c8fb2f3585536e0",
     "Content-Type": "application/json"
   },
   "json": {
-    "model": "deepseek-v4-pro",
-    "reasoning_effort": "max",
+    "model": "gpt-5.6-sol",
+    "reasoning": {
+      "effort": "high"
+    },
     "stream": false,
     "tools": [
       {
@@ -28,6 +30,16 @@
     ],
     "parallel_tool_calls": false,
     "instructions": "Proactively use Python for any task; check `./skills`; user run `./view.vbs` to view the content and call you",
-    "input": []
+    "input": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "[Compacted context summary; archived messages were replaced locally]\n\n# 当前会话压缩摘要\n\n## 用户目标与界面要求\n\n项目是 Windows 本地 `input.json`/Responses API 查看器。用户希望界面简洁、现代、低遮挡，尤其减少频繁工具调用造成的大面积重复显示。\n\n用户明确要求：\n1. 取消所有固定顶部栏和固定底部栏。\n2. 模型名作为最顶部的一条消息显示。\n3. 输入框处于消息流最下方，不悬浮。\n4. Token 数量在输入区右下方直接显示，不通过点击弹窗。\n5. 输入框为空也能点运行；有文字或附件时则追加后运行。\n6. 工具调用应连续聚合、默认折叠，减少占屏。\n7. 实现第一优先级交互、工具活动优化、Token 容量展示和微动画。\n8. **硬性约束：不可更改 `ae.py`，除非发现可复现的、非错误/崩溃处理性质的功能正确性 Bug。修改前应先说明复现、影响和必要性。** 当前 `ae.py` 已恢复为仓库原版，Git diff 必须保持为空。\n\n## 当前已实现（主要在 `viewer.py`）\n\n### 布局\n- 无 sticky/fixed 顶栏与底栏。\n- 模型名是消息流顶部的模型消息卡。\n- 输入表单跟随在消息历史之后。\n- Token 直接显示在输入框右下，并有细进度条。\n- 唯一固定元素是按需出现的小型“新动态”按钮，不是固定栏。\n\n### 工具活动\n- 连续 function call / output 合并为一个 `<details class=\"tool-group\">`。\n- 默认折叠，摘要显示工具名聚合（如 `python ×8`）、次数、完成/失败、观察耗时。\n- 按 `call_id` 配对调用与结果。\n- 实时失败可自动展开；历史首次加载的失败不会全部展开。\n- 工具完整输出不随状态接口传输，只在点击“查看输出”时通过 `/api/tool-output?id=...` 懒加载。\n- 输出可展开/收起，失败状态根据已有输出文本（Traceback/Error 等）推断。由于不能改 `ae.py`，不能可靠获得子进程退出码；这是已知限制。\n\n### 交互体验\n- 智能滚动：用户位于底部时跟随；向上阅读时不抢滚动位置。\n- 非底部出现“↓ N 项新动态”按钮。\n- 对话末尾显示等待 AI、等待工具、即将结束等运行状态和 spinner。\n- 输入框自动增高，草稿保存在 localStorage。\n- 空输入按钮显示“继续运行”；有内容/附件显示“发送并运行”；运行中显示“停止”。\n- Enter 发送（仅空闲时），Shift+Enter 换行；运行时 Enter 可正常编辑草稿；Esc 停止。\n- 运行时输入区不隐藏。\n- 支持向整个页面拖入文件。\n\n### Token\n- `/api/usage` 返回估算量和 `context_limit`。\n- 默认容量 `128000`，可通过 `AE_CONTEXT_LIMIT` 环境变量修改。\n- 直接显示 `估算 Token：当前 / 上限 · 百分比`。\n- 60% 黄色、85% 红色。\n- 修复了异步旧统计覆盖新结果和失败时快速无限重试的问题。\n- Token 是本地粗略估算，不是供应商精确用量。\n\n### 动画\n- 消息淡入、工具组展开、箭头旋转、新动态按钮出现、运行按钮按压、Token 条变化。\n- 遵循 `prefers-reduced-motion`。\n\n### 稳定性（仅修改 viewer）\n- `viewer.py` 的 `write_input` 使用临时文件 + `os.replace` 原子替换。\n- 发送/启动/停止通过 `_send_lock` 串行化，防止并发重复启动或消息覆盖。\n- Windows 停止使用 `taskkill /T /F` 结束完整工具进程树；POSIX 使用进程组。\n- `RUNNER_PID_FILE=.ae_runner.pid` 由 viewer 在启动时写入；viewer 重启后可恢复运行状态并停止旧任务；失效 PID 自动清理。\n- 注意：由于不能修改 ae.py，正常结束时 PID 文件不会由 ae.py 主动清理，但 viewer 的 `_pid_alive` 检测会清理失效文件。\n- 添加 `.gitignore` 忽略 PID、临时 JSON 和 Python 缓存。\n\n\n### 工具输出溢出修复（最新）\n- 用户反馈点击“查看输出”后，内容过长会超出显示区域。\n- 根因：`.tool-output` 只有 `max-height:320px`，没有 `overflow`；Grid 子项也缺少可收缩宽度约束，超长单行可能横向撑破页面。\n- 已仅修改 `viewer.py`：工具事件中间列改为 `minmax(0,1fr)`，事件增加 `min-width:0`；输出增加 `width/max-width:100%`、`min-width:0`、`overflow:auto`、任意位置断行。\n- Edge headless 用 1000 行输出及 5000 字符连续长行验证：显示高度限制为 320px，实际内容在内部滚动，横向未超出卡片。\n- `viewer.py` Python 编译和内联 JavaScript `node --check` 均通过；`ae.py` 仍无 Git diff。\n\n## 重要撤销记录\n\n一次 Bug 审计中曾临时修改 `ae.py`，加入异常文件、退出码标记、超时、PID 清理和原子写入。用户随后明确禁止这类修改。现已执行 `git checkout -- ae.py`，并移除了 viewer 中依赖 ae 错误侧车文件的逻辑。后续不得重新加入。\n\n## 已完成检查\n\n- `viewer.py` 与 `ae.py` Python 编译检查通过。\n- 页面内 JavaScript `node --check` 通过。\n- CSS/JS 括号平衡检查通过。\n- Edge headless 实际渲染通过：模型名、Token、工具组、输入框和运行状态正常生成，无应用级 JS 异常。\n- `/api/state`、`/api/usage`、`/api/tool-output` 已测试。\n- 父子进程树停止已用真实测试进程验证。\n- viewer 重启后的 PID 恢复已验证。\n\n## 当前文件状态与后续原则\n\n- 预压缩时应提交 `viewer.py`、`.gitignore` 及当前会话状态；`ae.py` 不应有 diff。\n- `input.json` 使用 Responses API 结构（`json.input` 中含 role items、function_call、function_call_output、reasoning items）。\n- 查看器通常在 `http://127.0.0.1:8765`。\n- 压缩完成后需要用户重新运行 `view.vbs` 才能从摘要继续。\n- 后续优先保持低工具噪声，不为简单任务频繁调用工具。"
+          }
+        ]
+      }
+    ]
   }
 }

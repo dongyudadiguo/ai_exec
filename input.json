@@ -1,7 +1,7 @@
 {
   "url": "https://uuapi.net/v1/responses",
   "headers": {
-    "Authorization": "Bearer sk-5b28edd972c8b55a3c37f7838ad317ca7efc8772e4bac8ac4c8fb2f3585536e0",
+    "Authorization": "Bearer sk-xxx",
     "Content-Type": "application/json"
   },
   "json": {

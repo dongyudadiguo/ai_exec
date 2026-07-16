@@ -1,5 +1,5 @@
 {
-  "url": "https://api.deepseek.com/v1/chat/completions",
+  "url": "https://api.deepseek.com/v1/responses",
   "headers": {
     "Authorization": "Bearer sk-xxx",
     "Content-Type": "application/json"
@@ -8,32 +8,26 @@
     "model": "deepseek-v4-pro",
     "reasoning_effort": "max",
     "stream": false,
-    "messages": [
-      {
-        "role": "system",
-        "content": "Proactively use Python for any task; check `./skills`; user run `./view.vbs` to view the content and call you"
-      }
-    ],
     "tools": [
       {
         "type": "function",
-        "function": {
-          "name": "python",
-          "description": "Execute Python code",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "code": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "code"
-            ]
-          }
+        "name": "python",
+        "description": "Execute Python code",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "code"
+          ]
         }
       }
     ],
-    "parallel_tool_calls": false
+    "parallel_tool_calls": false,
+    "instructions": "Proactively use Python for any task; check `./skills`; user run `./view.vbs` to view the content and call you",
+    "input": []
   }
 }

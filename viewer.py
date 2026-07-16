@@ -209,27 +209,27 @@ def file_part(part):
     mime = part.get_content_type() or mimetypes.guess_type(filename)[0] or "application/octet-stream"
     if mime.startswith("image/"):
         encoded = base64.b64encode(raw).decode("ascii")
-        return {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}}
+        return {"type": "input_image", "image_url": f"data:{mime};base64,{encoded}"}
     try:
         text = raw.decode("utf-8")
-        return {"type": "text", "text": f"附件 {filename}:\n{text}"}
+        return {"type": "input_text", "text": f"附件 {filename}:\n{text}"}
     except UnicodeDecodeError:
         encoded = base64.b64encode(raw).decode("ascii")
-        return {"type": "text", "text": f"附件 {filename} ({mime}, base64):\n{encoded}"}
+        return {"type": "input_text", "text": f"附件 {filename} ({mime}, base64):\n{encoded}"}
 
 
 def append_user_message(text, files):
+    """Append a Responses API user input item."""
     data = read_input()
     body = data.setdefault("json", {})
-    messages = body.setdefault("messages", [])
+    items = body.setdefault("input", [])
     parts = []
     if text.strip():
-        parts.append({"type": "text", "text": text.strip()})
+        parts.append({"type": "input_text", "text": text.strip()})
     parts.extend(files)
     if not parts:
         raise ValueError("message is empty")
-    content = parts[0]["text"] if len(parts) == 1 and parts[0].get("type") == "text" else parts
-    messages.append({"role": "user", "content": content})
+    items.append({"role": "user", "content": parts})
     write_input(data)
 
 
@@ -259,6 +259,63 @@ def _blob_url(data_url):
     key = str(abs(hash(data_url)))
     _blob_cache[key] = data_url
     return f"/api/blob?id={key}"
+
+
+def response_transcript(body):
+    """Convert Responses API input/output items to the viewer's chat-like shape."""
+    result = []
+    instructions = body.get("instructions")
+    if instructions:
+        result.append({"role": "system", "content": instructions})
+
+    pending_calls = []
+
+    def flush_calls():
+        nonlocal pending_calls
+        if pending_calls:
+            result.append({"role": "assistant", "tool_calls": pending_calls})
+            pending_calls = []
+
+    for item in body.get("input", []):
+        kind = item.get("type")
+        if kind == "function_call":
+            pending_calls.append({
+                "id": item.get("call_id"),
+                "function": {
+                    "name": item.get("name", "python"),
+                    "arguments": item.get("arguments", ""),
+                },
+            })
+            continue
+
+        flush_calls()
+        if kind == "function_call_output":
+            result.append({
+                "role": "tool",
+                "tool_call_id": item.get("call_id"),
+                "content": item.get("output", ""),
+            })
+            continue
+
+        role = item.get("role")
+        if role:
+            content = item.get("content", "")
+            if isinstance(content, list):
+                parts = []
+                for part in content:
+                    part_type = part.get("type")
+                    if part_type in ("input_text", "output_text", "text", "refusal"):
+                        parts.append({"type": "text", "text": part.get("text", part.get("refusal", ""))})
+                    elif part_type in ("input_image", "image_url"):
+                        image_url = part.get("image_url")
+                        if isinstance(image_url, dict):
+                            image_url = image_url.get("url", "")
+                        parts.append({"type": "image_url", "image_url": {"url": image_url or ""}})
+                content = parts[0]["text"] if len(parts) == 1 and parts[0].get("type") == "text" else parts
+            result.append({"role": role, "content": content})
+
+    flush_calls()
+    return result
 
 
 def display_content(content):
@@ -307,7 +364,7 @@ def load_cached():
                     return _state_cache["mtime"], _state_cache["model"], _state_cache["messages"]
                 raise
             body = data.get("json", {})
-            messages = body.get("messages", [])
+            messages = response_transcript(body)
             _state_cache.update({"mtime": mtime, "messages": messages, "model": body.get("model", ""), "usage": None})
         return mtime, _state_cache["model"], _state_cache["messages"]
 

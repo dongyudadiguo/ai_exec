@@ -7,7 +7,7 @@
   "json": {
     "model": "gpt-5.6-sol",
     "reasoning": {
-      "effort": "high"
+      "effort": "max"
     },
     "stream": false,
     "tools": [

@@ -1,0 +1,198 @@
+{
+  "benchmark": "tinyxml2 source-only compile and official test",
+  "agent": "AI Exec loop (instrumented, request semantics unchanged)",
+  "model": "gpt-5.6-sol",
+  "system_instruction": "Use Python proactively and complete the user task as efficiently as possible.",
+  "project_path": "C:\\Users\\12159\\AppData\\Local\\Temp\\ai_exec_benchmark\\trial_ai_exec_01",
+  "status": "completed",
+  "wall_seconds": 86.63,
+  "api_seconds": 83.709,
+  "tool_seconds": 2.916,
+  "round_count": 6,
+  "tool_call_count": 5,
+  "usage_sum": {
+    "input_tokens": 35008,
+    "output_tokens": 2407,
+    "total_tokens": 37415
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "api_seconds": 11.033,
+      "output_items": 2,
+      "function_calls": 1,
+      "usage": {
+        "input_tokens": 463,
+        "input_tokens_details": {
+          "cache_write_tokens": 0,
+          "cached_tokens": 0
+        },
+        "output_tokens": 376,
+        "output_tokens_details": {
+          "reasoning_tokens": 150
+        },
+        "total_tokens": 839
+      },
+      "assistant_text": "",
+      "tools": [
+        {
+          "call_id": "call_JaE30JjYBAsMB2QhlB79g1X1",
+          "code": "import os, subprocess, json, textwrap, shutil, sys\nroot=r'C:\\Users\\12159\\AppData\\Local\\Temp\\ai_exec_benchmark\\trial_ai_exec_01'\nprint('ROOT EXISTS:', os.path.isdir(root))\nif os.path.isdir(root):\n    print('Top-level:')\n    for name in os.listdir(root):\n        p=os.path.join(root,name)\n        print(('DIR ' if os.path.isdir(p) else 'FILE'), name, (os.path.getsize(p) if os.path.isfile(p) else ''))\nprint('\\nPATH tools:')\nfor tool in ['cmake','ninja','msbuild','cl','clang-cl','clang++','g++','gcc','mingw32-make','nmake','make','ctest']:\n    print(f'{tool}: {shutil.which(tool)}')\nprint('\\nPlatform:', sys.platform)\nprint('Python:', sys.version)\n",
+          "seconds": 0.122,
+          "returncode": 0,
+          "output_chars": 736,
+          "output_tail": "ROOT EXISTS: True\nTop-level:\nDIR  .github \nFILE .gitignore 287\nDIR  cmake \nFILE CMakeLists.txt 3546\nDIR  contrib \nDIR  docs \nFILE dox 109103\nFILE LICENSE.txt 826\nFILE Makefile 2046\nFILE meson.build 2416\nFILE meson_options.txt 1016\nFILE readme.md 12126\nDIR  resources \nFILE setversion.py 3712\nDIR  test \nFILE tinyxml2.cpp 79136\nFILE tinyxml2.h 74564\nFILE TinyXML2_small.png 214977\nFILE xmltest.cpp 101273\n\nPATH tools:\ncmake: None\nninja: None\nmsbuild: None\ncl: None\nclang-cl: None\nclang++: None\ng++: C:\\mingw64\\bin\\g++.EXE\ngcc: C:\\mingw64\\bin\\gcc.EXE\nmingw32-make: C:\\mingw64\\bin\\mingw32-make.EXE\nnmake: None\nmake: None\nctest: None\n\nPlatform: win32\nPython: 3.14.6 (tags/v3.14.6:c63aec6, Jun 10 2026, 10:26:10) [MSC v.1944 64 bit (AMD64)]\n"
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "api_seconds": 11.527,
+      "output_items": 2,
+      "function_calls": 1,
+      "usage": {
+        "input_tokens": 1139,
+        "input_tokens_details": {
+          "cache_write_tokens": 0,
+          "cached_tokens": 0
+        },
+        "output_tokens": 393,
+        "output_tokens_details": {
+          "reasoning_tokens": 58
+        },
+        "total_tokens": 1532
+      },
+      "assistant_text": "",
+      "tools": [
+        {
+          "call_id": "call_D7IOqX8LD1XRzDe3KdlGVZ1i",
+          "code": "from pathlib import Path\nroot=Path(r'C:\\Users\\12159\\AppData\\Local\\Temp\\ai_exec_benchmark\\trial_ai_exec_01')\nfor rel in ['Makefile','CMakeLists.txt','readme.md']:\n    p=root/rel\n    print(f'\\n===== {rel} =====')\n    txt=p.read_text(encoding='utf-8', errors='replace')\n    if rel=='readme.md':\n        # print lines mentioning build/test/make\n        lines=txt.splitlines()\n        for i,line in enumerate(lines):\n            if any(k in line.lower() for k in ['build','test','make','compile']):\n                print(f'{i+1}: {line}')\n    else:\n        print(txt)\nprint('\\n===== xmltest.cpp tail/main references =====')\ntext=(root/'xmltest.cpp').read_text(encoding='utf-8',errors='replace')\nfor i,line in enumerate(text.splitlines()):\n    if 'int main' in line or 'XMLTest' in line and ('Pass' in line or 'Fail' in line) or 'resources' in line or 'fail' in line.lower() and i>len(text.splitlines())-100:\n        print(f'{i+1}: {line}')\nprint('\\nLast 100 lines:')\nprint('\\n'.join(text.splitlines()[-100:]))\n",
+          "seconds": 0.102,
+          "returncode": 0,
+          "output_chars": 12040,
+          "output_tail": "faultOutput, testText) != nullptr); \n\t\t\tXMLTest(\"Default XMLPrinter should escape ' characters\", false, foundTextWithUnescapedApos);\n\t\t\t{\n\t\t\t\tXMLDocument parsingDoc;\n\t\t\t\tparsingDoc.Parse(defaultOutput);\n\t\t\t\tconst XMLAttribute* attrib = parsingDoc.FirstChildElement(\"element\")->FindAttribute(\"attrib\");\n\t\t\t\tXMLTest(\"Default XMLPrinter should output parsable xml\", testText, attrib->Value(), true);\n\t\t\t}\n\t\t}\n\t\t{\n\t\t\tXMLPrinter customPrinter(0, false, 0, XMLPrinter::DONT_ESCAPE_APOS_CHARS_IN_ATTRIBUTES);\n\t\t\tdoc.Print( &customPrinter );\n\t\t\tconst char* customOutput = customPrinter.CStr();\n\t\t\tconst bool foundTextWithUnescapedApos = (strstr(customOutput, testText) != nullptr); \n\t\t\tXMLTest(\"Custom XMLPrinter should not escape ' characters\", true, foundTextWithUnescapedApos);\n\t\t\t{\n\t\t\t\tXMLDocument parsingDoc;\n\t\t\t\tparsingDoc.Parse(customOutput);\n\t\t\t\tconst XMLAttribute* attrib = parsingDoc.FirstChildElement(\"element\")->FindAttribute(\"attrib\");\n\t\t\t\tXMLTest(\"Custom XMLPrinter should output parsable xml\", testText, attrib->Value(), true);\n\t\t\t}\n\t\t}\n\t}\n\t\n    // ----------- Performance tracking --------------\n\t{\n#if defined( _MSC_VER )\n\t\t__int64 start, end, freq;\n\t\tQueryPerformanceFrequency((LARGE_INTEGER*)&freq);\n#endif\n\n\t\tFILE* perfFP = fopen(\"resources/dream.xml\", \"r\");\n\t\tXMLTest(\"Open dream.xml\", true, perfFP != 0);\n\t\tfseek(perfFP, 0, SEEK_END);\n\t\tlong size = ftell(perfFP);\n\t\tfseek(perfFP, 0, SEEK_SET);\n\n\t\tchar* mem = new char[size + 1];\n\t\tmemset(mem, 0xfe, size);\n\t\tsize_t bytesRead = fread(mem, 1, size, perfFP);\n\t\tXMLTest(\"Read dream.xml\", true, uint32_t(size) >= uint32_t(bytesRead));\n\t\tfclose(perfFP);\n\t\tmem[size] = 0;\n\n#if defined( _MSC_VER )\n\t\tQueryPerformanceCounter((LARGE_INTEGER*)&start);\n#else\n\t\tclock_t cstart = clock();\n#endif\n\t\tbool parseDreamXmlFailed = false;\n\t\tstatic const int COUNT = 10;\n\t\tfor (int i = 0; i < COUNT; ++i) {\n\t\t\tXMLDocument doc;\n\t\t\tdoc.Parse(mem);\n\t\t\tparseDreamXmlFailed = parseDreamXmlFailed || doc.Error();\n\t\t}\n#if defined( _MSC_VER )\n\t\tQueryPerformanceCounter((LARGE_INTEGER*)&end);\n#else\n\t\tclock_t cend = clock();\n#endif\n\t\tXMLTest( \"Parse dream.xml\", false, parseDreamXmlFailed );\n\n\t\tdelete[] mem;\n\n\t\tstatic const char* note =\n#ifdef TINYXML2_DEBUG\n\t\t\t\"DEBUG\";\n#else\n\t\t\t\"Release\";\n#endif\n\n#if defined( _MSC_VER )\n\t\tconst double duration = 1000.0 * static_cast<double>(end - start) / (static_cast<double>(freq) * static_cast<double>(COUNT));\n#else\n\t\tconst double duration = static_cast<double>(cend - cstart) / static_cast<double>(COUNT);\n#endif\n\t\tprintf(\"\\nParsing dream.xml (%s): %.3f milli-seconds\\n\", note, duration);\n\t}\n\n#if defined( _MSC_VER ) &&  defined( TINYXML2_DEBUG )\n\t{\n\t\t_CrtMemCheckpoint( &endMemState );\n\n\t\t_CrtMemState diffMemState;\n\t\t_CrtMemDifference( &diffMemState, &startMemState, &endMemState );\n\t\t_CrtMemDumpStatistics( &diffMemState );\n\n\t\t{\n\t\t\tint leaksBeforeExit = _CrtDumpMemoryLeaks();\n\t\t\tXMLTest( \"No leaks before exit?\", FALSE, leaksBeforeExit );\n\t\t}\n\t}\n#endif\n\n\tprintf (\"\\nPass %d, Fail %d\\n\", gPass, gFail);\n\n\treturn gFail;\n}\n"
+        }
+      ]
+    },
+    {
+      "round": 3,
+      "api_seconds": 19.708,
+      "output_items": 2,
+      "function_calls": 1,
+      "usage": {
+        "input_tokens": 4983,
+        "input_tokens_details": {
+          "cache_write_tokens": 0,
+          "cached_tokens": 0
+        },
+        "output_tokens": 614,
+        "output_tokens_details": {
+          "reasoning_tokens": 399
+        },
+        "total_tokens": 5597
+      },
+      "assistant_text": "",
+      "tools": [
+        {
+          "call_id": "call_nTGcJKtcZwbkpErHWzQX3Gti",
+          "code": "import subprocess, os, shutil\nroot=r'C:\\Users\\12159\\AppData\\Local\\Temp\\ai_exec_benchmark\\trial_ai_exec_01'\nenv=os.environ.copy()\ncommands=[\n    ['g++','--version'],\n    ['mingw32-make','--version'],\n    ['ar','--version'],\n]\nfor cmd in commands:\n    print('\\n$', ' '.join(cmd))\n    p=subprocess.run(cmd,cwd=root,env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)\n    print('exit',p.returncode)\n    print(p.stdout[:3000])\nprint('\\nresources/out exists:',os.path.isdir(os.path.join(root,'resources','out')))\nif os.path.isdir(os.path.join(root,'resources')):\n    print('resources entries:', os.listdir(os.path.join(root,'resources'))[:100])\n",
+          "seconds": 0.242,
+          "returncode": 0,
+          "output_chars": 1168,
+          "output_tail": "\n$ g++ --version\nexit 0\ng++ (x86_64-win32-seh-rev1, Built by MinGW-Builds project) 15.2.0\nCopyright (C) 2025 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n\n\n$ mingw32-make --version\nexit 0\nGNU Make 4.4.1\nBuilt for x86_64-w64-mingw32\nCopyright (C) 1988-2023 Free Software Foundation, Inc.\nLicense GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>\nThis is free software: you are free to change and redistribute it.\nThere is NO WARRANTY, to the extent permitted by law.\n\n\n$ ar --version\nexit 0\nGNU ar (GNU Binutils) 2.46.0.20260210\nCopyright (C) 2026 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n\n\nresources/out exists: True\nresources entries: ['dream.xml', 'empty.xml', 'out', 'utf8test.xml', 'utf8testverify.xml', 'xmltest-4636783552757760.xml', 'xmltest-5330.xml', 'xmltest-5662204197076992.xml', 'xmltest-5720541257269248.xml']\n"
+        }
+      ]
+    },
+    {
+      "round": 4,
+      "api_seconds": 12.956,
+      "output_items": 2,
+      "function_calls": 1,
+      "usage": {
+        "input_tokens": 5948,
+        "input_tokens_details": {
+          "cache_write_tokens": 0,
+          "cached_tokens": 0
+        },
+        "output_tokens": 313,
+        "output_tokens_details": {
+          "reasoning_tokens": 100
+        },
+        "total_tokens": 6261
+      },
+      "assistant_text": "",
+      "tools": [
+        {
+          "call_id": "call_rJhXeO37HlIWNzuLqlWWgqgs",
+          "code": "import subprocess, os, time\nroot=r'C:\\Users\\12159\\AppData\\Local\\Temp\\ai_exec_benchmark\\trial_ai_exec_01'\ncmd=['mingw32-make','CXX=g++','xmltest']\nprint('$', subprocess.list2cmdline(cmd))\nstart=time.time()\np=subprocess.run(cmd,cwd=root,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=180)\nprint('exit',p.returncode,'elapsed',round(time.time()-start,2),'s')\nprint(p.stdout)\nprint('\\nArtifacts:')\nfor n in ['tinyxml2.o','libtinyxml2.a','xmltest','xmltest.exe']:\n    q=os.path.join(root,n)\n    print(n, 'exists' if os.path.exists(q) else 'missing', os.path.getsize(q) if os.path.exists(q) else '')\n",
+          "seconds": 2.242,
+          "returncode": 0,
+          "output_chars": 354,
+          "output_tail": "$ mingw32-make CXX=g++ xmltest\nexit 0 elapsed 2.16 s\ng++ -D_FILE_OFFSET_BITS=64 -fPIC   -c -o tinyxml2.o tinyxml2.cpp\nar cr libtinyxml2.a tinyxml2.o\nranlib libtinyxml2.a\ng++ -D_FILE_OFFSET_BITS=64 -fPIC    xmltest.cpp libtinyxml2.a   -o xmltest\n\n\nArtifacts:\ntinyxml2.o exists 206485\nlibtinyxml2.a exists 226824\nxmltest missing \nxmltest.exe exists 378237\n"
+        }
+      ]
+    },
+    {
+      "round": 5,
+      "api_seconds": 9.552,
+      "output_items": 2,
+      "function_calls": 1,
+      "usage": {
+        "input_tokens": 6400,
+        "input_tokens_details": {
+          "cache_write_tokens": 0,
+          "cached_tokens": 0
+        },
+        "output_tokens": 227,
+        "output_tokens_details": {
+          "reasoning_tokens": 33
+        },
+        "total_tokens": 6627
+      },
+      "assistant_text": "",
+      "tools": [
+        {
+          "call_id": "call_pV8rIZQXtSZ7wCS40AUBtxIV",
+          "code": "import subprocess, os, time, re\nroot=r'C:\\Users\\12159\\AppData\\Local\\Temp\\ai_exec_benchmark\\trial_ai_exec_01'\nexe=os.path.join(root,'xmltest.exe')\ncmd=[exe]\nprint('$ .\\\\xmltest.exe')\nstart=time.time()\np=subprocess.run(cmd,cwd=root,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=180,errors='replace')\nelapsed=time.time()-start\nout=p.stdout\nprint('exit',p.returncode,'elapsed',round(elapsed,2),'s','output chars',len(out),'lines',len(out.splitlines()))\nprint(out)\nprint('SUMMARY MATCHES:', re.findall(r'Pass\\s+\\d+,\\s+Fail\\s+\\d+',out))\n",
+          "seconds": 0.208,
+          "returncode": 0,
+          "output_chars": 32610,
+          "output_tail": "e-Element [XML_ERROR_PARSING_ELEMENT][XML_ERROR_PARSING_ELEMENT]\n[pass] ErrorLine-Element [3][3]\n[pass] ErrorLine-Attribute [XML_ERROR_PARSING_ATTRIBUTE][XML_ERROR_PARSING_ATTRIBUTE]\n[pass] ErrorLine-Attribute [true][true]\n[pass] ErrorLine-Attribute [XML_ERROR_PARSING_ATTRIBUTE][XML_ERROR_PARSING_ATTRIBUTE]\n[pass] ErrorLine-Attribute [4][4]\n[pass] ErrorLine-ElementClose [XML_ERROR_PARSING_ELEMENT][XML_ERROR_PARSING_ELEMENT]\n[pass] ErrorLine-ElementClose [true][true]\n[pass] ErrorLine-ElementClose [XML_ERROR_PARSING_ELEMENT][XML_ERROR_PARSING_ELEMENT]\n[pass] ErrorLine-ElementClose [3][3]\n[pass] LineNumbers-String [false][false]\n[pass] LineNumbers-String [true][true]\n[pass] LineNumbers-String [D01L01E02A02A03T03E03T04E05T05C06U07][D01L01E02A02A03T03E03T04E05T05C06U07]\n[pass] LineNumbers-CRLF [false][false]\n[pass] LineNumbers-CRLF [true][true]\n[pass] LineNumbers-CRLF [D01L02E03T05E07T07E10][D01L02E03T05E07T07E10]\n[pass] LineNumbers-File [false][false]\n[pass] LineNumbers-File [true][true]\n[pass] LineNumbers-File [D01L01E02E03A03A03T03E04A04A04T04E05A05A05T05E06A06A06T06E07A07A07T07E08A08A08T08E09T09E10T10][D01L01E02E03A03A03T03E04A04A04T04E05A05A05T05E06A06A06T06E07A07A07T07E08A08A08T08E09T09E10T10]\n[pass] Test mismatched elements. [true][true]\n[pass] Test mismatched elements. [XML_ERROR_MISMATCHED_ELEMENT][XML_ERROR_MISMATCHED_ELEMENT]\nError=XML_ERROR_MISMATCHED_ELEMENT ErrorID=14 (0xe) Line number=1: XMLElement name=Hello\nError=XML_ERROR_MISMATCHED_ELEMENT ErrorID=14 (0xe) Line number=1: XMLElement name=Hello\n[pass] Test attribute encode [false][false]\n[pass] Test decimal value [12A34][12A34]\n[pass] Test hex encode [56B78][56B78]\n[pass] Test attribute encode [false][false]\n[pass] Test attribute encode too long value [&#ABC9000000065;][&#ABC9000000065;]\n[pass] Test attribute encode out of unicode range [&#xffffffff;][&#xffffffff;]\n[pass] Test attribute encode out of int max value [&#5000000000;][&#5000000000;]\n[pass] Test attribute encode with a Hex value [E][E]\n[pass] Test attribute encode with a Hex value [!][!]\n[pass] Numeric ref U+10FFFF: no error [false][false]\n[pass] Numeric ref U+10FFFF: correct UTF-8 output [魪靠][魪靠]\n[pass] Numeric ref U+110000: no parse error [false][false]\n[pass] Numeric ref U+110000: not resolved (left as literal) [true][true]\n[pass] Overflow hex entity: no parse error [false][false]\n[pass] Overflow hex entity: not resolved to a character [true][true]\n[pass] Default XMLPrinter should escape ' characters [false][false]\n[pass] Default XMLPrinter should output parsable xml [text containing a ' character][text containing a ' character]\n[pass] Custom XMLPrinter should not escape ' characters [true][true]\n[pass] Custom XMLPrinter should output parsable xml [text containing a ' character][text containing a ' character]\n[pass] Open dream.xml [true][true]\n[pass] Read dream.xml [true][true]\n[pass] Parse dream.xml [false][false]\n\nParsing dream.xml (Release): 3.200 milli-seconds\n\nPass 528, Fail 0\n\nSUMMARY MATCHES: ['Pass 528, Fail 0']\n"
+        }
+      ]
+    },
+    {
+      "round": 6,
+      "api_seconds": 18.933,
+      "output_items": 2,
+      "function_calls": 0,
+      "usage": {
+        "input_tokens": 16075,
+        "input_tokens_details": {
+          "cache_write_tokens": 0,
+          "cached_tokens": 5632
+        },
+        "output_tokens": 484,
+        "output_tokens_details": {
+          "reasoning_tokens": 282
+        },
+        "total_tokens": 16559
+      },
+      "assistant_text": "已完成编译并运行 TinyXML2 官方测试。\n\n- **编译命令：**\n  ```bat\n  cd /d C:\\Users\\12159\\AppData\\Local\\Temp\\ai_exec_benchmark\\trial_ai_exec_01\n  mingw32-make CXX=g++ xmltest\n  ```\n- **生成的可执行文件：**\n  ```text\n  C:\\Users\\12159\\AppData\\Local\\Temp\\ai_exec_benchmark\\trial_ai_exec_01\\xmltest.exe\n  ```\n- **测试命令：**\n  ```bat\n  .\\xmltest.exe\n  ```\n- **测试结果：**\n  ```text\n  Pass 528, Fail 0\n  ```\n  进程退出码为 `0`。\n\n使用了机器现有的 MinGW-w64 GCC 15.2.0 工具链，未安装新软件，也未修改库的功能源码。"
+    }
+  ],
+  "final_text": "已完成编译并运行 TinyXML2 官方测试。\n\n- **编译命令：**\n  ```bat\n  cd /d C:\\Users\\12159\\AppData\\Local\\Temp\\ai_exec_benchmark\\trial_ai_exec_01\n  mingw32-make CXX=g++ xmltest\n  ```\n- **生成的可执行文件：**\n  ```text\n  C:\\Users\\12159\\AppData\\Local\\Temp\\ai_exec_benchmark\\trial_ai_exec_01\\xmltest.exe\n  ```\n- **测试命令：**\n  ```bat\n  .\\xmltest.exe\n  ```\n- **测试结果：**\n  ```text\n  Pass 528, Fail 0\n  ```\n  进程退出码为 `0`。\n\n使用了机器现有的 MinGW-w64 GCC 15.2.0 工具链，未安装新软件，也未修改库的功能源码。",
+  "verification": {
+    "executables": [
+      "xmltest.exe"
+    ],
+    "returncode": 0,
+    "seconds": 0.136,
+    "summary": [
+      "528",
+      "0"
+    ],
+    "tail": "e]\n[pass] LineNumbers-File [true][true]\n[pass] LineNumbers-File [D01L01E02E03A03A03T03E04A04A04T04E05A05A05T05E06A06A06T06E07A07A07T07E08A08A08T08E09T09E10T10][D01L01E02E03A03A03T03E04A04A04T04E05A05A05T05E06A06A06T06E07A07A07T07E08A08A08T08E09T09E10T10]\n[pass] Test mismatched elements. [true][true]\n[pass] Test mismatched elements. [XML_ERROR_MISMATCHED_ELEMENT][XML_ERROR_MISMATCHED_ELEMENT]\nError=XML_ERROR_MISMATCHED_ELEMENT ErrorID=14 (0xe) Line number=1: XMLElement name=Hello\nError=XML_ERROR_MISMATCHED_ELEMENT ErrorID=14 (0xe) Line number=1: XMLElement name=Hello\n[pass] Test attribute encode [false][false]\n[pass] Test decimal value [12A34][12A34]\n[pass] Test hex encode [56B78][56B78]\n[pass] Test attribute encode [false][false]\n[pass] Test attribute encode too long value [&#ABC9000000065;][&#ABC9000000065;]\n[pass] Test attribute encode out of unicode range [&#xffffffff;][&#xffffffff;]\n[pass] Test attribute encode out of int max value [&#5000000000;][&#5000000000;]\n[pass] Test attribute encode with a Hex value [E][E]\n[pass] Test attribute encode with a Hex value [!][!]\n[pass] Numeric ref U+10FFFF: no error [false][false]\n[pass] Numeric ref U+10FFFF: correct UTF-8 output [􏿿][􏿿]\n[pass] Numeric ref U+110000: no parse error [false][false]\n[pass] Numeric ref U+110000: not resolved (left as literal) [true][true]\n[pass] Overflow hex entity: no parse error [false][false]\n[pass] Overflow hex entity: not resolved to a character [true][true]\n[pass] Default XMLPrinter should escape ' characters [false][false]\n[pass] Default XMLPrinter should output parsable xml [text containing a ' character][text containing a ' character]\n[pass] Custom XMLPrinter should not escape ' characters [true][true]\n[pass] Custom XMLPrinter should output parsable xml [text containing a ' character][text containing a ' character]\n[pass] Open dream.xml [true][true]\n[pass] Read dream.xml [true][true]\n[pass] Parse dream.xml [false][false]\n\nParsing dream.xml (Release): 3.200 milli-seconds\n\nPass 528, Fail 0\n"
+  },
+  "error_trace": ""
+}

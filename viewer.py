@@ -908,11 +908,12 @@ function refreshToolGroup(group){
   if(!group.dataset.started)group.dataset.started=String(Date.now());
   if(complete&&!group.dataset.ended)group.dataset.ended=String(Date.now());
   if(!complete)delete group.dataset.ended;
-  const status=failed?`${events.length} 次 · ${failed} 失败`:complete?`${events.length} 次 · 已完成`:`${events.length} 次 · 返回 ${done}/${events.length}`;
+  // When nameText already has counts (e.g. python ×3), don't also say "3 次"
+  const status=failed?`${failed} 失败`:complete?'已完成':`返回 ${done}/${events.length}`;
   const elapsed=Number(group.dataset.ended||Date.now())-Number(group.dataset.started);
   const dur=elapsed>=300?durationText(elapsed):'';
-  const head=nameText?`工具活动 · ${nameText}`:'工具活动';
-  group.querySelector('.tool-title').textContent=dur?`${head}  ${status}  ${dur}`:`${head}  ${status}`;
+  const head=nameText?`工具活动 · ${nameText}`:(events.length?`工具活动 · ${events.length} 次`:'工具活动');
+  group.querySelector('.tool-title').textContent=[head, status, dur].filter(Boolean).join(' · ');
   group.querySelector('.tool-meta').textContent='';
   group.querySelector('.tool-duration').textContent='';
   if(failed&&!firstPaint)group.open=true;

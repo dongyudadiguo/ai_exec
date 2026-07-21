@@ -1,11 +1,11 @@
 {
-  "url": "https://api.stepfun.com/v1/responses",
+  "url": "https://api.linkai.shop/v1/responses",
   "headers": {
-    "Authorization": "Bearer 2VllZt7USYYAz7SN5eLEY6JOuOsHJAjXrAKV24mWW1Zh1f1gSriLJYU5El9Me1ih",
+    "Authorization": "Bearer sk-127835ef407106782776b14703023fb8b75fb3a0192666d0572d96b7cfab2f3c",
     "Content-Type": "application/json"
   },
   "json": {
-    "model": "step-3.7-flash",
+    "model": "grok-4.5",
     "reasoning": {
       "effort": "high"
     },

@@ -1,13 +1,13 @@
 {
-  "url": "https://api.inceptionlabs.ai/v1/responses",
+  "url": "https://api.stepfun.com/v1/responses",
   "headers": {
-    "Authorization": "Bearer sk_53092ee0bb1716de9c1b94ca412765ad",
+    "Authorization": "Bearer sk_xxx",
     "Content-Type": "application/json"
   },
   "json": {
-    "model": "mercury-2",
+    "model": "step-3.5-flash",
     "reasoning": {
-      "effort": "max"
+      "effort": "high"
     },
     "stream": false,
     "tools": [

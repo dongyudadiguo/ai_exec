@@ -1,11 +1,11 @@
 {
   "url": "https://api.stepfun.com/v1/responses",
   "headers": {
-    "Authorization": "Bearer sk_xxx",
+    "Authorization": "Bearer 2VllZt7USYYAz7SN5eLEY6JOuOsHJAjXrAKV24mWW1Zh1f1gSriLJYU5El9Me1ih",
     "Content-Type": "application/json"
   },
   "json": {
-    "model": "step-3.5-flash",
+    "model": "step-3.7-flash",
     "reasoning": {
       "effort": "high"
     },

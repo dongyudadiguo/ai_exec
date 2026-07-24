@@ -1,13 +1,13 @@
 {
   "url": "https://api.linkai.shop/v1/responses",
   "headers": {
-    "Authorization": "Bearer sk-127835ef407106782776b14703023fb8b75fb3a0192666d0572d96b7cfab2f3c",
+    "Authorization": "Bearer sk-xxx",
     "Content-Type": "application/json"
   },
   "json": {
-    "model": "grok-4.5",
+    "model": "gpt-5.6-sol",
     "reasoning": {
-      "effort": "high"
+      "effort": "max"
     },
     "stream": false,
     "tools": [
@@ -29,7 +29,7 @@
       }
     ],
     "parallel_tool_calls": false,
-    "instructions": "Proactively use Python for any task; check `./skills` and actively to update; user run `./view.vbs` to view the content and call you",
+    "instructions": "Proactively use Python for any task; check `./skills`; user run `./view.vbs` to view the content and call you",
     "input": []
   }
 }

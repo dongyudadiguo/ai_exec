@@ -29,7 +29,7 @@
       }
     ],
     "parallel_tool_calls": false,
-    "instructions": "Minimize token usage, except when searching for or building reusable tools, Proactively use Python for any task; user run `./view.vbs` to view the content and call you",
+    "instructions": "Proactively use Python for any task; check `./skills`; user run `./view.vbs` to view the content and call you",
     "input": []
   }
 }

@@ -308,72 +308,71 @@ def usage_from_messages(messages):
 
 
 def file_part(part):
+    """Create one native Chat Completions user-content part."""
     filename = part.get_filename() or "attachment"
     raw = part.get_payload(decode=True) or b""
     mime = part.get_content_type() or mimetypes.guess_type(filename)[0] or "application/octet-stream"
     if mime.startswith("image/"):
         encoded = base64.b64encode(raw).decode("ascii")
-        return {"type": "input_image", "image_url": f"data:{mime};base64,{encoded}"}
+        return {
+            "type": "image_url",
+            "image_url": {"url": f"data:{mime};base64,{encoded}"},
+        }
     try:
         text = raw.decode("utf-8")
-        return {"type": "input_text", "text": f"附件 {filename}:\n{text}"}
+        return {"type": "text", "text": f"附件 {filename}:\n{text}"}
     except UnicodeDecodeError:
         encoded = base64.b64encode(raw).decode("ascii")
-        return {"type": "input_text", "text": f"附件 {filename} ({mime}, base64):\n{encoded}"}
+        return {
+            "type": "file",
+            "file": {
+                "filename": filename,
+                "file_data": f"data:{mime};base64,{encoded}",
+            },
+        }
 
 
-def _user_item_text(item):
-    """Extract editable plain text from a Responses API user input item."""
-    content = item.get("content", "")
+def _user_message_text(message):
+    """Extract editable text from a native Chat Completions user message."""
+    content = message.get("content", "")
     if isinstance(content, str):
         return content
     if not isinstance(content, list):
         return ""
     texts = []
     for part in content:
-        if not isinstance(part, dict):
-            continue
-        part_type = part.get("type")
-        if part_type in ("input_text", "output_text", "text"):
+        if isinstance(part, dict) and part.get("type") == "text":
             texts.append(str(part.get("text", "")))
-        elif part_type == "refusal":
-            texts.append(str(part.get("refusal", part.get("text", ""))))
-    return "\n".join(t for t in texts if t)
+    return "\n".join(text for text in texts if text)
 
 
 def pop_last_user_message():
-    """Remove the final user input item when it is still the last transcript item.
-
-    Returns the editable plain text so the viewer can put it back into the composer.
-    """
     data = read_input()
     body = data.setdefault("json", {})
-    items = body.setdefault("input", [])
-    if not items:
+    messages = body.setdefault("messages", [])
+    if not messages:
         raise ValueError("no messages to edit")
-    last = items[-1]
+    last = messages[-1]
     if last.get("role") != "user":
         raise ValueError("last message is not a user message")
-    # Only allow retracting a pure user turn (no function_call/output after it).
-    # Since we check the last input item, anything after would already mean it is not last.
-    text = _user_item_text(last)
-    items.pop()
+    text = _user_message_text(last)
+    messages.pop()
     write_input(data)
     return text
 
 
 def append_user_message(text, files):
-    """Append a Responses API user input item."""
+    """Append a native Chat Completions user message."""
     data = read_input()
     body = data.setdefault("json", {})
-    items = body.setdefault("input", [])
+    messages = body.setdefault("messages", [])
     parts = []
     if text.strip():
-        parts.append({"type": "input_text", "text": text.strip()})
+        parts.append({"type": "text", "text": text.strip()})
     parts.extend(files)
     if not parts:
         raise ValueError("message is empty")
-    items.append({"role": "user", "content": parts})
+    messages.append({"role": "user", "content": parts})
     write_input(data)
 
 
@@ -398,67 +397,69 @@ def parse_multipart(handler):
     return text, files
 
 
-
 def _blob_url(data_url):
     key = str(abs(hash(data_url)))
     _blob_cache[key] = data_url
     return f"/api/blob?id={key}"
 
 
-def response_transcript(body):
-    """Convert Responses API input/output items to the viewer's chat-like shape."""
+def _collapse_display_parts(parts):
+    if not parts:
+        return None
+    if len(parts) == 1 and parts[0].get("type") == "text":
+        return parts[0].get("text", "")
+    return parts
+
+
+def _chat_content_for_display(content):
+    if isinstance(content, str) or content is None:
+        return content
+    if not isinstance(content, list):
+        return str(content)
+    parts = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        kind = part.get("type")
+        if kind == "text":
+            parts.append({"type": "text", "text": str(part.get("text", ""))})
+        elif kind == "image_url":
+            image_url = part.get("image_url") or {}
+            if isinstance(image_url, str):
+                image_url = {"url": image_url}
+            parts.append({"type": "image_url", "image_url": {"url": image_url.get("url", "")}})
+        elif kind == "file":
+            file_info = part.get("file") or {}
+            parts.append({"type": "text", "text": f"[附件：{file_info.get('filename', 'file')}]"})
+        elif kind == "refusal":
+            parts.append({"type": "text", "text": str(part.get("refusal", ""))})
+    return _collapse_display_parts(parts)
+
+
+def chat_transcript(body):
+    """Read only a native Chat Completions `messages` transcript."""
     result = []
-    instructions = body.get("instructions")
-    if instructions:
-        result.append({"role": "system", "content": instructions})
-
-    pending_calls = []
-
-    def flush_calls():
-        nonlocal pending_calls
-        if pending_calls:
-            result.append({"role": "assistant", "tool_calls": pending_calls})
-            pending_calls = []
-
-    for item in body.get("input", []):
-        kind = item.get("type")
-        if kind == "function_call":
-            pending_calls.append({
-                "id": item.get("call_id"),
-                "function": {
-                    "name": item.get("name", "python"),
-                    "arguments": item.get("arguments", ""),
-                },
-            })
+    for message in body.get("messages", []):
+        if not isinstance(message, dict) or not message.get("role"):
             continue
-
-        flush_calls()
-        if kind == "function_call_output":
-            result.append({
-                "role": "tool",
-                "tool_call_id": item.get("call_id"),
-                "content": item.get("output", ""),
-            })
-            continue
-
-        role = item.get("role")
-        if role:
-            content = item.get("content", "")
-            if isinstance(content, list):
-                parts = []
-                for part in content:
-                    part_type = part.get("type")
-                    if part_type in ("input_text", "output_text", "text", "refusal"):
-                        parts.append({"type": "text", "text": part.get("text", part.get("refusal", ""))})
-                    elif part_type in ("input_image", "image_url"):
-                        image_url = part.get("image_url")
-                        if isinstance(image_url, dict):
-                            image_url = image_url.get("url", "")
-                        parts.append({"type": "image_url", "image_url": {"url": image_url or ""}})
-                content = parts[0]["text"] if len(parts) == 1 and parts[0].get("type") == "text" else parts
-            result.append({"role": role, "content": content})
-
-    flush_calls()
+        item = {
+            "role": message["role"],
+            "content": _chat_content_for_display(message.get("content")),
+        }
+        if message.get("role") == "tool":
+            item["tool_call_id"] = message.get("tool_call_id")
+        if message.get("tool_calls"):
+            item["tool_calls"] = []
+            for call in message["tool_calls"]:
+                function = call.get("function") or {}
+                item["tool_calls"].append({
+                    "id": call.get("id"),
+                    "function": {
+                        "name": function.get("name", "python"),
+                        "arguments": function.get("arguments", ""),
+                    },
+                })
+        result.append(item)
     return result
 
 
@@ -515,7 +516,7 @@ def load_cached():
                     return _state_cache["mtime"], _state_cache["model"], _state_cache["messages"]
                 raise
             body = data.get("json", {})
-            messages = response_transcript(body)
+            messages = chat_transcript(body)
             _state_cache.update({"mtime": mtime, "messages": messages, "model": body.get("model", ""), "usage": None})
         return mtime, _state_cache["model"], _state_cache["messages"]
 
@@ -569,7 +570,7 @@ PAGE = r"""
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>input.json 查看器</title>
+<title>Chat Completions · input.json 查看器</title>
 <script>
 /* Apply theme before paint */
 (function(){

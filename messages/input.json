@@ -1,0 +1,36 @@
+{
+  "url": "https://apinebula.ai/v1/messages",
+  "headers": {
+    "x-api-key": "sk-fcyqOxhzTB46JjRqveN3aoNGLujZ2DyIppI37K3pgsXIjadZ",
+    "anthropic-version": "2023-06-01",
+    "Content-Type": "application/json"
+  },
+  "json": {
+    "model": "grok-4.5",
+    "max_tokens": 8192,
+    "stream": false,
+    "system": "Proactively use Python for any task\ncheck `./skills`\nuser run `./view.vbs` to view the content and call you",
+    "tools": [
+      {
+        "name": "python",
+        "description": "Execute Python code",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "code"
+          ]
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "auto",
+      "disable_parallel_tool_use": true
+    },
+    "messages": []
+  }
+}

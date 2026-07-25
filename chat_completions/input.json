@@ -1,0 +1,39 @@
+{
+  "url": "https://apinebula.ai/v1/chat/completions",
+  "headers": {
+    "Authorization": "Bearer sk-fcyqOxhzTB46JjRqveN3aoNGLujZ2DyIppI37K3pgsXIjadZ",
+    "Content-Type": "application/json"
+  },
+  "json": {
+    "model": "grok-4.5",
+    "stream": false,
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "python",
+          "description": "Execute Python code",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ]
+          }
+        }
+      }
+    ],
+    "parallel_tool_calls": false,
+    "messages": [
+      {
+        "role": "system",
+        "content": "Proactively use Python for any task\ncheck `./skills`\nuser run `./view.vbs` to view the content and call you"
+      }
+    ],
+    "reasoning_effort": "high"
+  }
+}

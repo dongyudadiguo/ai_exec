@@ -1,13 +1,13 @@
 {
-  "url": "https://api.linkai.shop/v1/responses",
+  "url": "https://apinebula.ai/v1/responses",
   "headers": {
-    "Authorization": "Bearer sk-xxx",
+    "Authorization": "Bearer sk-fcyqOxhzTB46JjRqveN3aoNGLujZ2DyIppI37K3pgsXIjadZ",
     "Content-Type": "application/json"
   },
   "json": {
-    "model": "gpt-5.6-sol",
+    "model": "grok-4.5",
     "reasoning": {
-      "effort": "max"
+      "effort": "high"
     },
     "stream": false,
     "tools": [

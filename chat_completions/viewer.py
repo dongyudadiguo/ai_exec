@@ -26,7 +26,7 @@ PORT = int(os.environ.get("AE_VIEWER_PORT", "8765"))
 _runners = {}
 _process_lock = threading.Lock()
 _send_lock = threading.Lock()
-_state_cache = {"signature": None, "file": None, "mtime": None, "messages": None, "model": "", "usage": None}
+_state_cache = {}  # transcript path -> {"signature","mtime","messages","model","usage"}
 _state_cache_lock = threading.Lock()
 _blob_cache = {}
 TOOL_PREVIEW = int(os.environ.get("AE_TOOL_PREVIEW", "800"))
@@ -38,10 +38,11 @@ def read_input(path=None):
     return json.loads(target.read_text(encoding="utf-8"))
 
 
-def write_input(data):
-    temp = INPUT_FILE.with_name(f"{INPUT_FILE.name}.{os.getpid()}.tmp")
+def write_input(data, path=None):
+    target = INPUT_FILE if path is None else Path(path)
+    temp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
     temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(temp, INPUT_FILE)
+    os.replace(temp, target)
 
 
 
@@ -121,6 +122,21 @@ def current_chat_id() -> str:
     return _chat_id_from_filename(INPUT_FILE.name) or "default"
 
 
+def resolve_chat(chat_id=None):
+    """Map an explicit chat id to (id, transcript path); fall back to the active chat.
+
+    Every transcript read/write goes through here, so a chat switch racing with
+    a send (or a second browser tab) can no longer hit the wrong conversation.
+    """
+    raw = (chat_id or "").strip()
+    if not raw:
+        return current_chat_id(), INPUT_FILE
+    path = ROOT / _filename_for_chat_id(raw)
+    if not path.is_file():
+        raise FileNotFoundError(f"对话不存在: {path.name}")
+    return raw, path
+
+
 def list_chats():
     found = []
     default = ROOT / "input.json"
@@ -159,14 +175,7 @@ def list_chats():
 
 def _invalidate_state_cache():
     with _state_cache_lock:
-        _state_cache.update({
-            "signature": None,
-            "file": None,
-            "mtime": None,
-            "messages": None,
-            "model": "",
-            "usage": None,
-        })
+        _state_cache.clear()
 
 
 def set_active_chat(chat_id: str):
@@ -340,6 +349,55 @@ def _pid_alive(pid):
         return False
 
 
+def _pid_create_time(pid):
+    """Process start time (epoch seconds), or None when it cannot be read.
+
+    Windows recycles pids within minutes, so liveness alone is not proof that a
+    pid still belongs to the runner we launched.
+    """
+    if not pid or pid <= 0:
+        return None
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.GetProcessTimes.argtypes = (wintypes.HANDLE,) + (ctypes.POINTER(wintypes.FILETIME),) * 4
+        kernel32.GetProcessTimes.restype = wintypes.BOOL
+        handle = kernel32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return None
+        created, exited, kern, user = (wintypes.FILETIME() for _ in range(4))
+        try:
+            ok = kernel32.GetProcessTimes(
+                handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(kern), ctypes.byref(user)
+            )
+        finally:
+            kernel32.CloseHandle(handle)
+        if not ok:
+            return None
+        ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime
+        # FILETIME counts 100ns units since 1601-01-01.
+        return (ticks - 116444736000000000) / 10000000.0
+    try:
+        with open(f"/proc/{pid}/stat", "r", encoding="utf-8", errors="replace") as handle:
+            fields = handle.read().rsplit(") ", 1)[-1].split()
+        starttime = int(fields[19])
+        btime = 0
+        with open("/proc/stat", "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if line.startswith("btime "):
+                    btime = int(line.split()[1])
+                    break
+        if not btime:
+            return None
+        return btime + starttime / float(os.sysconf("SC_CLK_TCK") or 100)
+    except (OSError, ValueError, IndexError, AttributeError):
+        return None
+
+
 def _runner_pid_file(chat_id=None):
     """Pid file keyed by transcript filename so chat ids cannot collide after sanitizing."""
     cid = (chat_id or current_chat_id() or "default").strip() or "default"
@@ -365,32 +423,91 @@ def _clear_runner_pid_file(chat_id):
         pass
 
 
+def _write_runner_pid(chat_id, pid):
+    """Store pid + start time so a recycled pid can never be mistaken for our runner."""
+    _ensure_runner_dir()
+    payload = {"pid": int(pid), "ctime": _pid_create_time(pid)}
+    try:
+        _runner_pid_file(chat_id).write_text(json.dumps(payload), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _read_runner_pid(chat_id):
+    """Return (pid, ctime|None, pidfile_mtime|None) or None."""
+    path = _runner_pid_file(chat_id)
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+        mtime = path.stat().st_mtime
+    except OSError:
+        return None
+    if not raw:
+        return None
+    try:
+        info = json.loads(raw)
+    except json.JSONDecodeError:
+        info = None
+    if isinstance(info, dict):
+        try:
+            return int(info.get("pid")), info.get("ctime"), mtime
+        except (TypeError, ValueError):
+            return None
+    try:  # legacy pid files stored the bare pid
+        return int(raw), None, mtime
+    except ValueError:
+        return None
+
+
+def _pid_matches(pid, ctime, pidfile_mtime=None):
+    """Alive AND still the same process instance we recorded."""
+    if not _pid_alive(pid):
+        return False
+    started = _pid_create_time(pid)
+    if started is None:
+        return True  # platform cannot verify: fall back to liveness
+    if ctime is not None:
+        return abs(started - ctime) <= 2.0
+    if pidfile_mtime is not None:
+        # Legacy file: it was written immediately after the process started.
+        return abs(started - pidfile_mtime) <= 120.0
+    return True
+
+
 def _runner_pid_unlocked(chat_id=None):
     """Return alive pid for chat_id, cleaning stale registry/pid files."""
     cid = (chat_id or current_chat_id() or "default").strip() or "default"
     entry = _runners.get(cid)
     if entry is not None:
         proc = entry.get("proc")
-        if proc is not None and proc.poll() is None:
-            return proc.pid
+        if proc is not None:
+            if proc.poll() is None:
+                return proc.pid
+            # Our own child exited: never trust its pid again, it may be reused.
+            _runners.pop(cid, None)
+            _clear_runner_pid_file(cid)
+            return None
         pid = entry.get("pid")
-        if pid and _pid_alive(pid):
+        if pid and _pid_matches(pid, entry.get("ctime")):
             return pid
         _runners.pop(cid, None)
         _clear_runner_pid_file(cid)
         return None
 
-    pid_path = _runner_pid_file(cid)
-    try:
-        pid = int(pid_path.read_text(encoding="ascii").strip())
-    except (OSError, ValueError):
+    info = _read_runner_pid(cid)
+    if info is None:
         return None
-    if _pid_alive(pid):
+    pid, ctime, mtime = info
+    if _pid_matches(pid, ctime, mtime):
         try:
             target = ROOT / _filename_for_chat_id(cid)
         except ValueError:
             target = None
-        _runners[cid] = {"proc": None, "pid": pid, "file": target}
+        _runners[cid] = {
+            "proc": None,
+            "pid": pid,
+            "ctime": ctime if ctime is not None else _pid_create_time(pid),
+            "file": target,
+        }
         return pid
     _clear_runner_pid_file(cid)
     return None
@@ -539,13 +656,13 @@ def start_process(chat_id=None, input_file=None):
             stderr=subprocess.DEVNULL,
             start_new_session=(os.name != "nt"),
         )
-        _ensure_runner_dir()
-        pid_path = _runner_pid_file(cid)
-        try:
-            pid_path.write_text(str(proc.pid), encoding="ascii")
-        except OSError:
-            pass
-        _runners[cid] = {"proc": proc, "pid": proc.pid, "file": target}
+        _write_runner_pid(cid, proc.pid)
+        _runners[cid] = {
+            "proc": proc,
+            "pid": proc.pid,
+            "ctime": _pid_create_time(proc.pid),
+            "file": target,
+        }
         return True
 
 
@@ -693,8 +810,8 @@ def _user_message_text(message):
     return "\n".join(text for text in texts if text)
 
 
-def pop_last_user_message():
-    data = read_input()
+def pop_last_user_message(path=None):
+    data = read_input(path)
     body = data.setdefault("json", {})
     messages = body.setdefault("messages", [])
     if not messages:
@@ -704,13 +821,13 @@ def pop_last_user_message():
         raise ValueError("last message is not a user message")
     text = _user_message_text(last)
     messages.pop()
-    write_input(data)
+    write_input(data, path)
     return text
 
 
-def append_user_message(text, files):
+def append_user_message(text, files, path=None):
     """Append a native Chat Completions user message."""
-    data = read_input()
+    data = read_input(path)
     body = data.setdefault("json", {})
     messages = body.setdefault("messages", [])
     parts = []
@@ -720,7 +837,7 @@ def append_user_message(text, files):
     if not parts:
         raise ValueError("message is empty")
     messages.append({"role": "user", "content": parts})
-    write_input(data)
+    write_input(data, path)
 
 
 def parse_multipart(handler):
@@ -850,43 +967,44 @@ def display_message(m):
     return d
 
 
-def load_cached():
-    while True:
-        input_file = INPUT_FILE
-        st = input_file.stat()
-        mtime = st.st_mtime
-        signature = (input_file, st.st_mtime_ns, st.st_size)
+def load_cached(path=None):
+    """Parse one chat transcript, cached per file so parallel chats never thrash."""
+    input_file = Path(path) if path is not None else INPUT_FILE
+    st = input_file.stat()
+    signature = (st.st_mtime_ns, st.st_size)
+    with _state_cache_lock:
+        entry = _state_cache.get(input_file)
+        if entry is not None and entry["signature"] == signature:
+            return entry["mtime"], entry["model"], entry["messages"]
+    try:
+        data = read_input(input_file)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError, KeyError):
+        # ae.py rewrites the transcript; a concurrent read can see a partial file.
         with _state_cache_lock:
-            # INPUT_FILE can change while a threaded state request is starting.
-            # Never populate the shared cache with data from the previous chat.
-            if input_file != INPUT_FILE:
-                continue
-            if _state_cache["signature"] != signature or _state_cache["messages"] is None:
-                try:
-                    data = read_input(input_file)
-                except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError, KeyError):
-                    # ae.py rewrites the transcript; a concurrent read can see a partial file.
-                    if _state_cache["messages"] is not None and _state_cache["file"] == input_file:
-                        return _state_cache["mtime"], _state_cache["model"], _state_cache["messages"]
-                    raise
-                if input_file != INPUT_FILE:
-                    continue
-                body = data.get("json", {})
-                messages = chat_transcript(body)
-                _state_cache.update({
-                    "signature": signature,
-                    "file": input_file,
-                    "mtime": mtime,
-                    "messages": messages,
-                    "model": body.get("model", ""),
-                    "usage": None,
-                })
-            return _state_cache["mtime"], _state_cache["model"], _state_cache["messages"]
+            entry = _state_cache.get(input_file)
+        if entry is not None:
+            return entry["mtime"], entry["model"], entry["messages"]
+        raise
+    body = data.get("json", {})
+    messages = chat_transcript(body)
+    model = body.get("model", "")
+    with _state_cache_lock:
+        _state_cache[input_file] = {
+            "signature": signature,
+            "mtime": st.st_mtime,
+            "messages": messages,
+            "model": model,
+            "usage": None,
+        }
+        while len(_state_cache) > 12:
+            _state_cache.pop(next(iter(_state_cache)), None)
+    return st.st_mtime, model, messages
 
 
-def state_payload(light_if_unchanged=False, since=None, after=None):
-    mtime, model, messages = load_cached()
-    is_running = running()
+def state_payload(light_if_unchanged=False, since=None, after=None, chat_id=None):
+    cid, target = resolve_chat(chat_id)
+    mtime, model, messages = load_cached(target)
+    is_running = running(cid)
     phase = runner_phase(messages, is_running)
     if light_if_unchanged and since is not None and mtime <= since:
         return {
@@ -894,6 +1012,7 @@ def state_payload(light_if_unchanged=False, since=None, after=None):
             "running": is_running,
             "updated": mtime,
             "count": len(messages),
+            "chat": cid,
             **phase,
         }
     reset = after is None or after < 0 or after > len(messages)
@@ -906,21 +1025,29 @@ def state_payload(light_if_unchanged=False, since=None, after=None):
         "count": len(messages),
         "offset": 0 if reset else after,
         "reset": reset,
+        "chat": cid,
         **phase,
     }
 
 
-def usage_payload():
-    mtime, model, messages = load_cached()
+def usage_payload(chat_id=None):
+    _, target = resolve_chat(chat_id)
+    mtime, _model, messages = load_cached(target)
     with _state_cache_lock:
-        if _state_cache.get("usage") is None:
-            _state_cache["usage"] = usage_from_messages(messages)
-        usage = _state_cache["usage"]
+        entry = _state_cache.get(target)
+        usage = entry.get("usage") if entry else None
+    if usage is None:
+        usage = usage_from_messages(messages)
+        with _state_cache_lock:
+            entry = _state_cache.get(target)
+            if entry is not None:
+                entry["usage"] = usage
     return {"updated": mtime, "usage": usage, "context_limit": CONTEXT_LIMIT}
 
 
-def tool_output_payload(call_id):
-    _, _, messages = load_cached()
+def tool_output_payload(call_id, chat_id=None):
+    _, target = resolve_chat(chat_id)
+    _, _, messages = load_cached(target)
     for message in messages:
         if message.get("role") == "tool" and message.get("tool_call_id") == call_id:
             return {"call_id": call_id, "output": str(message.get("content", ""))}
@@ -1701,7 +1828,7 @@ async function editLastUserMessage(el){
   editInFlight=true;
   const fallback=el.dataset.editText||'';
   try{
-    const r=await fetch('/api/retract-last-user',{method:'POST'});
+    const r=await fetch('/api/retract-last-user?chat='+chatParam(),{method:'POST'});
     if(!r.ok) throw new Error(await r.text());
     const data=await r.json();
     const text=(data && typeof data.text==='string')?data.text:fallback;
@@ -1763,8 +1890,15 @@ async function poll(){
   const reqAfter=messageCount;
   const reqSince=lastUpdated;
   try{
-    const r=await fetch('/api/state?since='+encodeURIComponent(reqSince)+'&after='+encodeURIComponent(reqAfter));
+    const r=await fetch('/api/state?since='+encodeURIComponent(reqSince)+'&after='+encodeURIComponent(reqAfter)+'&chat='+chatParam());
     const data=await r.json();
+    if(r.status===404||(data&&data.missing)){
+      // This chat is gone (deleted elsewhere): fall back to the server's active one.
+      chatBootstrapped=false;
+      await loadChats();
+      requestFullResync();
+      return;
+    }
     if(gen!==pollGeneration){
       // Stale response after requestFullResync / transcript rewrite — drop it.
       return;
@@ -1812,6 +1946,9 @@ filesEl.addEventListener('click',e=>{if(e.target.dataset.i!==undefined){selected
 for(const event of ['dragenter','dragover'])document.addEventListener(event,e=>{if([...e.dataTransfer.types].includes('Files')){e.preventDefault();drop.classList.add('drag')}});
 for(const event of ['dragleave','drop'])document.addEventListener(event,e=>{if(event==='drop'&&e.dataTransfer?.files?.length){e.preventDefault();addFiles(e.dataTransfer.files)}drop.classList.remove('drag')});
 function draftKey(id){return 'ae-draft:'+String(id||activeChatId||'default')}
+// Every transcript request is scoped to THIS tab's chat, so a chat switch or a
+// second tab can never redirect a send/stop/poll to another conversation.
+function chatParam(){return encodeURIComponent(activeChatId||'default')}
 function readDraft(id){try{return localStorage.getItem(draftKey(id))||''}catch(e){return ''}}
 function writeDraft(val,id){try{localStorage.setItem(draftKey(id), String(val??''))}catch(e){}}
 function clearDraft(id){try{localStorage.removeItem(draftKey(id))}catch(e){}}
@@ -1846,7 +1983,7 @@ messagesEl.addEventListener('click',async e=>{
   const row=button.closest('.tool-event');let out=row.querySelector('.tool-output');
   if(out){out.classList.toggle('hidden');button.textContent=out.classList.contains('hidden')?'查看输出':'收起输出';return}
   button.disabled=true;button.textContent='加载中…';
-  try{const r=await fetch('/api/tool-output?id='+encodeURIComponent(row.dataset.callId));if(!r.ok)throw new Error();const data=await r.json();out=document.createElement('pre');fillToolOutputEl(out, data.output||'(无输出)');row.appendChild(out);button.textContent='收起输出'}catch(err){button.textContent='加载失败'}finally{button.disabled=false}
+  try{const r=await fetch('/api/tool-output?id='+encodeURIComponent(row.dataset.callId)+'&chat='+chatParam());if(!r.ok)throw new Error();const data=await r.json();out=document.createElement('pre');fillToolOutputEl(out, data.output||'(无输出)');row.appendChild(out);button.textContent='收起输出'}catch(err){button.textContent='加载失败'}finally{button.disabled=false}
 });
 function invalidateUsage(){
   usageGeneration++;
@@ -1862,7 +1999,7 @@ async function loadUsage(){
   let stale=false;
   usageText.textContent='Token：计算中…';
   try{
-    const r=await fetch('/api/usage');
+    const r=await fetch('/api/usage?chat='+chatParam());
     if(!r.ok)throw new Error();
     const data=await r.json();
     if(generation!==usageGeneration)return;
@@ -1887,7 +2024,7 @@ async function stopRunner(btn){
   if(!isRunning)return;
   if(btn){btn.disabled=true;btn.textContent='结束中…'}
   try{
-    await fetch('/api/stop',{method:'POST'});
+    await fetch('/api/stop?chat='+chatParam(),{method:'POST'});
   }finally{
     // Always re-enable: setRunningUi only updates labels, not disabled.
     if(btn) btn.disabled=false;
@@ -1915,7 +2052,7 @@ if(themeToggleBtn) themeToggleBtn.addEventListener('click',()=>toggleTheme());
 runBtn.addEventListener('click',async e=>{if(isRunning){e.preventDefault();await stopRunner(runBtn)}});
 composer.addEventListener('submit',async e=>{
   e.preventDefault();if(isRunning)return;const submitted=msgInput.value,fd=new FormData();fd.append('message',submitted);selectedFiles.forEach(f=>fd.append('files',f,f.name));runBtn.disabled=true;
-  try{const r=await fetch('/api/send',{method:'POST',body:fd});if(!r.ok)throw new Error(await r.text());if(msgInput.value===submitted){msgInput.value='';clearDraft();resizeComposer()}selectedFiles=[];refreshFiles();isRunning=true;phaseLabel='等待 AI';setRunningUi();schedulePoll(0)}catch(err){alert(err.message||'运行失败')}finally{runBtn.disabled=false}
+  try{const r=await fetch('/api/send?chat='+chatParam(),{method:'POST',body:fd});if(!r.ok)throw new Error(await r.text());if(msgInput.value===submitted){msgInput.value='';clearDraft();resizeComposer()}selectedFiles=[];refreshFiles();isRunning=true;phaseLabel='等待 AI';setRunningUi();schedulePoll(0)}catch(err){alert(err.message||'运行失败')}finally{runBtn.disabled=false}
 });
 
 
@@ -1932,6 +2069,7 @@ const chatModalCancelBtn=document.getElementById('chatModalCancel');
 const chatModalOkBtn=document.getElementById('chatModalOk');
 const chatToastEl=document.getElementById('chatToast');
 let chatsCache=[];
+let chatBootstrapped=false;
 let chatsLoading=false;
 let chatsReloadQueued=false;
 let chatsLoadPromise=null;
@@ -1973,7 +2111,10 @@ function openChatMenu(id, x, y){
   if(!chatMenuEl) return;
   chatMenuId=id;
   const isDefault=id==='default';
+  const row=(chatsCache||[]).find(c=>c && String(c.id)===String(id));
+  const isRun=!!(row && row.running);
   chatMenuEl.innerHTML=`
+    ${isRun?'<button type="button" data-act="stop" role="menuitem">\u505c\u6b62\u8fd0\u884c</button>':''}
     <button type="button" data-act="rename" ${isDefault?'disabled style="opacity:.45;cursor:not-allowed"':''} role="menuitem">重命名</button>
     <button type="button" data-act="delete" class="danger" ${isDefault?'disabled style="opacity:.45;cursor:not-allowed"':''} role="menuitem">删除</button>
   `;
@@ -2142,8 +2283,7 @@ function renderChatList(){
   chatListEl.innerHTML=items.map(c=>{
     const id=String(c.id||'default');
     const name=String(c.name||id);
-    const active=!!c.active || id===activeChatId;
-    if(active) activeChatId=id;
+    const active=id===activeChatId; // per-tab selection, not the server-global one
     const isRun=!!c.running;
     const meta=isRun ? '运行中' : relativeTime(c.mtime);
     return `<div class="chat-item${active?' active':''}${isRun?' running':''}" data-chat-id="${esc(id)}" role="listitem" title="${esc(name)}${isRun?' · 运行中':''}">
@@ -2173,7 +2313,9 @@ async function loadChats(){
         const r=await fetch('/api/chats');
         if(!r.ok) throw new Error(await r.text());
         const data=await r.json();
-        if(data && data.active) activeChatId=data.active;
+        // Adopt the server-side active chat only once per tab, so two tabs can
+        // watch two conversations without stealing each other's view.
+        if(data && data.active && !chatBootstrapped){activeChatId=data.active;chatBootstrapped=true}
         chatsCache=Array.isArray(data.chats)?data.chats:[];
         renderChatList();
         syncRunningFromCache();
@@ -2221,6 +2363,7 @@ async function selectChat(id){
     if(!r.ok) throw new Error(await r.text());
     const data=await r.json();
     activeChatId=data.active||id;
+    chatBootstrapped=true;
     if(Array.isArray(data.chats)) chatsCache=data.chats;
     resetComposerLocal({clearDraft:false});
     requestFullResync();
@@ -2245,6 +2388,7 @@ async function createChat(name){
     if(!r.ok) throw new Error(await r.text());
     const data=await r.json();
     activeChatId=(data.chat&&data.chat.id)||trimmed;
+    chatBootstrapped=true;
     if(Array.isArray(data.chats)) chatsCache=data.chats;
     resetComposerLocal({clearDraft:true});
     requestFullResync();
@@ -2273,8 +2417,7 @@ async function renameChat(id, name){
       const oldDraft=readDraft(id);
       if(oldDraft){writeDraft(oldDraft, newId); clearDraft(id)}
     }catch(e){}
-    if(data && data.active) activeChatId=data.active;
-    else if(id===activeChatId) activeChatId=newId;
+    if(id===activeChatId) activeChatId=newId; // renaming a background chat must not move this tab
     await loadChats();
     closeChatModal();
     showChatToast('已重命名');
@@ -2282,6 +2425,25 @@ async function renameChat(id, name){
     showChatToast(err.message||'重命名失败');
   }finally{
     setChatBusy(false);
+  }
+}
+async function stopChat(id){
+  // Stop any chat's runner straight from the rail (background tasks included).
+  if(!id) return;
+  try{
+    const r=await fetch('/api/stop?chat='+encodeURIComponent(id),{method:'POST'});
+    if(!r.ok) throw new Error(await r.text());
+    const data=await r.json();
+    if(String(id)===String(activeChatId)){
+      isRunning=false;
+      phaseLabel='\u7a7a\u95f2';
+      setRunningUi();
+      schedulePoll(0);
+    }
+    showChatToast(data && data.stopped ? '\u5df2\u505c\u6b62' : '\u672a\u5728\u8fd0\u884c');
+    loadChats();
+  }catch(err){
+    showChatToast(err.message||'\u505c\u6b62\u5931\u8d25');
   }
 }
 async function deleteChat(id){
@@ -2295,7 +2457,7 @@ async function deleteChat(id){
     if(!r.ok) throw new Error(await r.text());
     const data=await r.json();
     clearDraft(id);
-    if(data && data.active) activeChatId=data.active;
+    if(wasActive) activeChatId=(data && data.active) || 'default';
     if(wasActive || activeChatId!==beforeActive){
       resetComposerLocal({clearDraft:false});
       requestFullResync();
@@ -2351,7 +2513,9 @@ if(chatMenuEl){
     const id=chatMenuId;
     closeChatMenu();
     if(!id) return;
-    if(act==='rename'){
+    if(act==='stop'){
+      stopChat(id);
+    }else if(act==='rename'){
       const cur=(chatsCache.find(c=>c.id===id)||{}).name||id;
       openChatModal('rename', id, cur);
     }else if(act==='delete'){
@@ -2431,15 +2595,28 @@ class Handler(BaseHTTPRequestHandler):
                 after = int(qs.get("after", [""])[0])
             except ValueError:
                 pass
-            return self.send_json(state_payload(light_if_unchanged=True, since=since, after=after))
+            try:
+                return self.send_json(state_payload(
+                    light_if_unchanged=True, since=since, after=after, chat_id=qs.get("chat", [""])[0]
+                ))
+            except (ValueError, OSError) as exc:
+                # Chat vanished (deleted elsewhere): let the tab resync its list.
+                return self.send_json({"missing": True, "error": str(exc)}, 404)
+        if path == "/api/usage":
+            try:
+                return self.send_json(usage_payload(parse_qs(parsed.query).get("chat", [""])[0]))
+            except (ValueError, OSError) as exc:
+                return self.send_json({"missing": True, "error": str(exc)}, 404)
+        if path == "/api/tool-output":
+            qs = parse_qs(parsed.query)
+            call_id = qs.get("id", [""])[0]
+            try:
+                payload = tool_output_payload(call_id, qs.get("chat", [""])[0])
+            except (ValueError, OSError):
+                payload = None
+            return self.send_json(payload) if payload is not None else self.send_error(404)
         if path == "/api/chats":
             return self.send_json({"chats": list_chats(), "active": current_chat_id()})
-        if path == "/api/usage":
-            return self.send_json(usage_payload())
-        if path == "/api/tool-output":
-            call_id = parse_qs(parsed.query).get("id", [""])[0]
-            payload = tool_output_payload(call_id)
-            return self.send_json(payload) if payload is not None else self.send_error(404)
         if path == "/api/blob":
             key = parse_qs(parsed.query).get("id", [""])[0]
             data_url = _blob_cache.get(key)
@@ -2463,33 +2640,51 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlparse(self.path).path
         try:
+            query = parse_qs(urlparse(self.path).query)
+            chat_arg = query.get("chat", [""])[0]
             if path == "/api/send":
-                # Parallel multi-chat: only block if THIS active chat already has a runner.
+                # Parallel multi-chat: only block if THIS chat already has a runner.
                 text, files = parse_multipart(self)
                 with _send_lock:
-                    cid = current_chat_id()
-                    target = INPUT_FILE
+                    try:
+                        cid, target = resolve_chat(chat_arg)
+                    except ValueError as exc:
+                        return self.send_text(str(exc), 400)
+                    except FileNotFoundError as exc:
+                        return self.send_text(str(exc), 404)
                     if running(cid):
                         return self.send_text("process is already running", 409)
                     appended = bool(text.strip() or files)
                     if appended:
-                        append_user_message(text, files)
+                        append_user_message(text, files, target)
                     if not start_process(cid, target):
                         return self.send_text("process could not be started", 409)
-                return self.send_json({"ok": True, "message_appended": appended})
+                return self.send_json({"ok": True, "message_appended": appended, "chat": cid})
             if path == "/api/stop":
                 with _send_lock:
-                    stopped = stop_process(current_chat_id())
-                return self.send_json({"stopped": stopped})
+                    try:
+                        cid, _ = resolve_chat(chat_arg)
+                    except ValueError as exc:
+                        return self.send_text(str(exc), 400)
+                    except FileNotFoundError as exc:
+                        return self.send_text(str(exc), 404)
+                    stopped = stop_process(cid)
+                return self.send_json({"stopped": stopped, "chat": cid})
             if path == "/api/retract-last-user":
                 with _send_lock:
-                    if running(current_chat_id()):
-                        stop_process(current_chat_id())
                     try:
-                        text = pop_last_user_message()
+                        cid, target = resolve_chat(chat_arg)
+                    except ValueError as exc:
+                        return self.send_text(str(exc), 400)
+                    except FileNotFoundError as exc:
+                        return self.send_text(str(exc), 404)
+                    if running(cid):
+                        stop_process(cid)
+                    try:
+                        text = pop_last_user_message(target)
                     except ValueError as exc:
                         return self.send_text(str(exc), 409)
-                return self.send_json({"ok": True, "text": text})
+                return self.send_json({"ok": True, "text": text, "chat": cid})
             if path == "/api/chats":
                 length = int(self.headers.get("Content-Length", "0") or 0)
                 raw = self.rfile.read(length) if length > 0 else b"{}"

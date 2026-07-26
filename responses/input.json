@@ -29,17 +29,7 @@
       }
     ],
     "parallel_tool_calls": false,
-    "instructions": "Use Python for any task\ncheck `./skills`\nuser run `./view.vbs` to view the content and call you",
-    "input": [
-      {
-        "role": "user",
-        "content": [
-          {
-            "type": "input_text",
-            "text": "[Compacted context summary; archived messages were replaced locally]\n\n## Active goal\nPolish multi-conversation UX in the three ai_exec viewers (responses / chat_completions / messages). Keep ae.py untouched. Manage context via compaction skill.\n\n## Workspace / launch\n- Root: C:\\Users\\12159\\Desktop\\ai_exec\n- Viewers: responses/viewer.py, chat_completions/viewer.py, messages/viewer.py (keep in sync)\n- Launch: ./view.vbs → pythonw viewer.py\n- Active transcript: responses/input.json (via .ae_active_input)\n- Compaction: responses/skills/context_compaction (compact_active_file under AE_RUNNER=1)\n\n## Multi-chat architecture (settled)\n- list/create/select/rename/delete; default protected\n- Active chat via .ae_active_input\n- Parallel per-chat runners: _runners[chat_id] + .ae_runners/<transcript-filename>.pid\n- start_process / stop_process / stop_all_processes; /api/send only blocks if THAT chat running\n- Rename while running FORBIDDEN; PID keyed by transcript filename\n- Per-chat drafts: localStorage ae-draft:<chatId>\n- Env for children: AE_RUNNER=1, AE_INPUT_FILE, AE_CONVERSATION_ID\n\n## Rail UX — current rules (just updated)\nDensity / layout:\n- 0 chats: no side rail; floating '+' top-left over content\n- 1 chat: no side rail; floating '+' top-left over content (chat tile not shown)\n- 2–3 chats (wide): full list, no search\n- 4+ chats (wide): list + search\n- viewport ≤640px and ≥2 chats: left narrow rail with 36×36 square tiles (chat-item-tile first CJK/letter) + '+' below; contextmenu still works\n- html classes: chat-solo-rail, chat-empty-rail, chat-rail-narrow; matchMedia resize hook re-renders\n\nSolo/empty '+' styling (latest user request — done):\n- Position: top-left (same as classic rail), NOT bottom-right\n- No circular background / border / backdrop; transparent like original icon control\n- Shadow only when '+' actually overlaps message content: class is-over-content + drop-shadow filters\n- Detection: updateSoloPlusOverlap via elementsFromPoint on button center/corners; scheduleSoloPlusOverlap on scroll/resize/render/updateChatRailMode/renderChatList\n- --chat-rail-space collapses to 16px so main content is full-width\n\n## Modified files\n- responses/viewer.py\n- chat_completions/viewer.py\n- messages/viewer.py\nDo NOT edit ae.py unless user asks.\n\n## Verification habits\n- py_compile all three viewers\n- node --check on inline JS blocks\n- Prefer targeted checks; restart via ./view.vbs to load viewer edits\n\n## Architecture notes / limits\n- Three viewers still highly duplicated\n- Parallel ae.py share cwd=ROOT; skills should use AE_INPUT_FILE\n- No per-row stop in rail\n- Markdown: marked 11.1.1, DOMPurify 3.1.6, highlight.js 11.9.0 CDN\n\n## Exact next task\nWait for user's next request. Prefer small targeted rail/UX polish; do not revisit settled multi-runner process logic unless asked."
-          }
-        ]
-      }
-    ]
+    "instructions": "use Python for any task\ncheck `./skills`\nuser run `./view.vbs` to view the content and call you",
+    "input": []
   }
 }

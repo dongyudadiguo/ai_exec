@@ -31,7 +31,7 @@
     "messages": [
       {
         "role": "system",
-        "content": "use Python for any task\n`./skills`\nuser run `./view.vbs` to view the content and call you"
+        "content": "Use Python for any task\ncheck `./skills`\nuser run `./view.vbs` to view the content and call you"
       }
     ],
     "reasoning_effort": "high"

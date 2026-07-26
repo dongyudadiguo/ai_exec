@@ -16,7 +16,7 @@
     "output_config": {
       "effort": "max"
     },
-    "system": "use Python for any task\n`./skills`\nuser run `./view.vbs` to view the content and call you",
+    "system": "Use Python for any task\ncheck `./skills`\nuser run `./view.vbs` to view the content and call you",
     "tools": [
       {
         "name": "python",

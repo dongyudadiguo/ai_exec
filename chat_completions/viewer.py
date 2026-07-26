@@ -8,6 +8,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from email.parser import BytesParser
 from email.policy import default
@@ -16,29 +17,301 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parent
-INPUT_FILE = ROOT / "input.json"
+INPUT_FILE = ROOT / "input.json"  # active conversation file; switched at runtime
 AE_FILE = ROOT / "ae.py"
-RUNNER_PID_FILE = ROOT / ".ae_runner.pid"
+RUNNER_PID_DIR = ROOT / ".ae_runners"
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("AE_VIEWER_PORT", "8765"))
-_process = None
+# Per-chat runners: chat_id -> {"proc": Popen|None, "pid": int|None, "file": Path}
+_runners = {}
 _process_lock = threading.Lock()
 _send_lock = threading.Lock()
-_state_cache = {"mtime": None, "messages": None, "model": "", "usage": None}
+_state_cache = {"signature": None, "file": None, "mtime": None, "messages": None, "model": "", "usage": None}
 _state_cache_lock = threading.Lock()
 _blob_cache = {}
 TOOL_PREVIEW = int(os.environ.get("AE_TOOL_PREVIEW", "800"))
 CONTEXT_LIMIT = int(os.environ.get("AE_CONTEXT_LIMIT", "128000"))
 
 
-def read_input():
-    return json.loads(INPUT_FILE.read_text(encoding="utf-8"))
+def read_input(path=None):
+    target = INPUT_FILE if path is None else Path(path)
+    return json.loads(target.read_text(encoding="utf-8"))
 
 
 def write_input(data):
     temp = INPUT_FILE.with_name(f"{INPUT_FILE.name}.{os.getpid()}.tmp")
     temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(temp, INPUT_FILE)
+
+
+
+ACTIVE_FILE = ROOT / ".ae_active_input"
+_input_lock = threading.Lock()
+
+
+def _chat_id_from_filename(name: str):
+    if name == "input.json":
+        return "default"
+    if name.startswith("input_") and name.endswith(".json"):
+        return name[len("input_") : -len(".json")]
+    return None
+
+
+def _filename_for_chat_id(chat_id: str) -> str:
+    if chat_id is not None and not isinstance(chat_id, str):
+        raise ValueError("无效的对话 ID")
+    cid = (chat_id or "default").strip() or "default"
+    if cid == "default":
+        return "input.json"
+    try:
+        clean = _sanitize_chat_name(cid)
+    except ValueError as exc:
+        raise ValueError("无效的对话 ID") from exc
+    if clean != cid:
+        raise ValueError("无效的对话 ID")
+    return f"input_{cid}.json"
+
+
+def _sanitize_chat_name(name: str) -> str:
+    name = (name or "").strip()
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", name)
+    name = name.strip(" .")
+    if not name:
+        raise ValueError("对话名不能为空")
+    if name.lower() in {"default", "input"}:
+        raise ValueError("对话名不可用")
+    if len(name) > 48:
+        name = name[:48].rstrip(" .")
+    if not name:
+        raise ValueError("对话名不能为空")
+    return name
+
+
+def _clear_transcript(data: dict) -> dict:
+    """Keep request config, drop conversation turns for a fresh chat."""
+    body = data.setdefault("json", {})
+    if isinstance(body, dict):
+        if "input" in body:
+            body["input"] = []
+        if "messages" in body and isinstance(body.get("messages"), list):
+            body["messages"] = [m for m in body["messages"] if isinstance(m, dict) and m.get("role") == "system"]
+    return data
+
+
+def _restore_active_input():
+    global INPUT_FILE
+    try:
+        name = ACTIVE_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        name = ""
+    cid = _chat_id_from_filename(name) if name else None
+    if cid is not None and (cid == "default" or cid):
+        try:
+            valid_name = _filename_for_chat_id(cid)
+        except ValueError:
+            valid_name = ""
+        cand = ROOT / valid_name if valid_name == name else None
+        if cand is not None and cand.is_file():
+            INPUT_FILE = cand
+            return
+    INPUT_FILE = ROOT / "input.json"
+
+
+def current_chat_id() -> str:
+    return _chat_id_from_filename(INPUT_FILE.name) or "default"
+
+
+def list_chats():
+    found = []
+    default = ROOT / "input.json"
+    if default.is_file():
+        found.append(default)
+    for path in sorted(ROOT.glob("input_*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if _chat_id_from_filename(path.name):
+            found.append(path)
+    # de-dupe while preserving order
+    seen = set()
+    chats = []
+    active = current_chat_id()
+    for path in found:
+        if path.name in seen:
+            continue
+        seen.add(path.name)
+        cid = _chat_id_from_filename(path.name)
+        if not cid:
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            mtime = 0
+        chats.append({
+            "id": cid,
+            "name": "默认" if cid == "default" else cid,
+            "file": path.name,
+            "mtime": mtime,
+            "active": cid == active,
+            "running": running(cid),
+        })
+    # default first, then recent named chats
+    chats.sort(key=lambda c: (0 if c["id"] == "default" else 1, -c["mtime"], c["name"]))
+    return chats
+
+
+def _invalidate_state_cache():
+    with _state_cache_lock:
+        _state_cache.update({
+            "signature": None,
+            "file": None,
+            "mtime": None,
+            "messages": None,
+            "model": "",
+            "usage": None,
+        })
+
+
+def set_active_chat(chat_id: str):
+    """Switch visible/active chat without stopping other chats' runners."""
+    global INPUT_FILE
+    filename = _filename_for_chat_id(chat_id)
+    path = ROOT / filename
+    if not path.is_file():
+        raise FileNotFoundError(f"对话不存在: {filename}")
+    with _input_lock:
+        with _send_lock:
+            INPUT_FILE = path
+            try:
+                ACTIVE_FILE.write_text(filename + "\n", encoding="utf-8")
+            except OSError:
+                pass
+            _invalidate_state_cache()
+    return current_chat_id()
+
+
+def _auto_chat_name() -> str:
+    """Generate an unused chat id like 新对话 / 新对话2 ..."""
+    existing = set()
+    for p in ROOT.glob("input_*.json"):
+        cid = _chat_id_from_filename(p.name)
+        if cid:
+            existing.add(cid)
+    base = "新对话"
+    if base not in existing:
+        return base
+    n = 2
+    while f"{base}{n}" in existing:
+        n += 1
+    return f"{base}{n}"
+
+
+def create_chat(name: str = ""):
+    raw = (name or "").strip()
+    cid = _sanitize_chat_name(raw) if raw else _auto_chat_name()
+    path = ROOT / f"input_{cid}.json"
+    if path.exists():
+        # If user-provided name collides, error; auto names should not collide.
+        if raw:
+            raise ValueError("同名对话已存在")
+        cid = _auto_chat_name()
+        path = ROOT / f"input_{cid}.json"
+    # Prefer default input.json as template so new chats share tools/model config.
+    template_path = ROOT / "input.json"
+    if not template_path.is_file():
+        template_path = INPUT_FILE if INPUT_FILE.is_file() else None
+    if template_path is None or not template_path.is_file():
+        raise FileNotFoundError("找不到可用的 input 模板")
+    data = None
+    last_exc = None
+    for _ in range(8):
+        try:
+            loaded = json.loads(template_path.read_text(encoding="utf-8"))
+            if not isinstance(loaded, dict):
+                raise ValueError("input 模板格式错误")
+            data = loaded
+            break
+        except ValueError:
+            raise
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            # Template chat may be mid-rewrite by its own runner.
+            last_exc = exc
+            time.sleep(0.02)
+    if data is None:
+        raise ValueError(f"读取对话模板失败: {last_exc}")
+    data = _clear_transcript(data)
+    temp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp, path)
+    set_active_chat(cid)
+    return {"id": cid, "name": cid, "file": path.name, "active": True}
+
+
+def rename_chat(chat_id: str, new_name: str):
+    global INPUT_FILE
+    cid = (chat_id or "").strip()
+    if not cid or cid == "default":
+        raise ValueError("默认对话不能重命名")
+    new_cid = _sanitize_chat_name(new_name)
+    src = ROOT / _filename_for_chat_id(cid)
+    dst = ROOT / _filename_for_chat_id(new_cid)
+    if not src.is_file():
+        raise FileNotFoundError(f"对话不存在: {src.name}")
+    if dst.exists():
+        raise ValueError("同名对话已存在")
+    with _input_lock:
+        with _send_lock:
+            was_active = current_chat_id() == cid
+            # ae.py holds Path(argv[1]) for its whole life. Renaming the transcript under
+            # a live runner recreates the old path on the next write (split-brain).
+            if running(cid):
+                raise ValueError("对话运行中，请先停止再重命名")
+            os.replace(src, dst)
+            # Clear any stale registry/pid leftovers for the old id.
+            with _process_lock:
+                entry = _runners.pop(cid, None)
+                if entry is not None:
+                    entry["file"] = dst
+                    _runners[new_cid] = entry
+                try:
+                    old_pid_path = _runner_pid_file(cid)
+                    new_pid_path = _runner_pid_file(new_cid)
+                    if old_pid_path.is_file():
+                        os.replace(old_pid_path, new_pid_path)
+                except OSError:
+                    pass
+            if was_active:
+                INPUT_FILE = dst
+                try:
+                    ACTIVE_FILE.write_text(dst.name + "\n", encoding="utf-8")
+                except OSError:
+                    pass
+                _invalidate_state_cache()
+    return {"id": new_cid, "name": new_cid, "file": dst.name, "active": current_chat_id() == new_cid}
+
+
+def delete_chat(chat_id: str):
+    global INPUT_FILE
+    cid = (chat_id or "").strip()
+    if not cid or cid == "default":
+        raise ValueError("默认对话不能删除")
+    path = ROOT / _filename_for_chat_id(cid)
+    if not path.is_file():
+        raise FileNotFoundError(f"对话不存在: {path.name}")
+    with _input_lock:
+        with _send_lock:
+            was_active = current_chat_id() == cid
+            # Always stop this chat's runner before deleting its transcript.
+            stop_process(cid)
+            try:
+                path.unlink()
+            except OSError as exc:
+                raise ValueError(f"删除失败: {exc}") from exc
+            if was_active:
+                INPUT_FILE = ROOT / "input.json"
+                try:
+                    ACTIVE_FILE.write_text("input.json\n", encoding="utf-8")
+                except OSError:
+                    pass
+                _invalidate_state_cache()
+    return {"deleted": cid, "active": current_chat_id()}
 
 
 def _pid_alive(pid):
@@ -67,25 +340,65 @@ def _pid_alive(pid):
         return False
 
 
-def _runner_pid_unlocked():
-    if _process is not None and _process.poll() is None:
-        return _process.pid
+def _runner_pid_file(chat_id=None):
+    """Pid file keyed by transcript filename so chat ids cannot collide after sanitizing."""
+    cid = (chat_id or current_chat_id() or "default").strip() or "default"
     try:
-        pid = int(RUNNER_PID_FILE.read_text(encoding="ascii").strip())
+        filename = _filename_for_chat_id(cid)
+    except ValueError:
+        filename = "input.json"
+    # e.g. input.json.pid / input_新对话.json.pid — unique per chat file.
+    return RUNNER_PID_DIR / f"{filename}.pid"
+
+
+def _ensure_runner_dir():
+    try:
+        RUNNER_PID_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+
+
+def _clear_runner_pid_file(chat_id):
+    try:
+        _runner_pid_file(chat_id).unlink()
+    except OSError:
+        pass
+
+
+def _runner_pid_unlocked(chat_id=None):
+    """Return alive pid for chat_id, cleaning stale registry/pid files."""
+    cid = (chat_id or current_chat_id() or "default").strip() or "default"
+    entry = _runners.get(cid)
+    if entry is not None:
+        proc = entry.get("proc")
+        if proc is not None and proc.poll() is None:
+            return proc.pid
+        pid = entry.get("pid")
+        if pid and _pid_alive(pid):
+            return pid
+        _runners.pop(cid, None)
+        _clear_runner_pid_file(cid)
+        return None
+
+    pid_path = _runner_pid_file(cid)
+    try:
+        pid = int(pid_path.read_text(encoding="ascii").strip())
     except (OSError, ValueError):
         return None
     if _pid_alive(pid):
+        try:
+            target = ROOT / _filename_for_chat_id(cid)
+        except ValueError:
+            target = None
+        _runners[cid] = {"proc": None, "pid": pid, "file": target}
         return pid
-    try:
-        RUNNER_PID_FILE.unlink()
-    except OSError:
-        pass
+    _clear_runner_pid_file(cid)
     return None
 
 
-def running():
+def running(chat_id=None):
     with _process_lock:
-        return _runner_pid_unlocked() is not None
+        return _runner_pid_unlocked(chat_id) is not None
 
 
 def pending_tool_progress(messages):
@@ -191,15 +504,22 @@ def prepend_pythonpath(env, path):
     return env
 
 
-def start_process():
-    global _process
+def start_process(chat_id=None, input_file=None):
+    """Start ae.py for one chat. Leaves other chats' runners alone. ae.py unchanged."""
+    cid = (chat_id or current_chat_id() or "default").strip() or "default"
+    target = Path(input_file) if input_file is not None else (ROOT / _filename_for_chat_id(cid))
     with _process_lock:
-        if _runner_pid_unlocked() is not None:
+        if _runner_pid_unlocked(cid) is not None:
+            return False
+        if not target.is_file():
             return False
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0
         env = os.environ.copy()
-        # Lets compaction children stop this runner without editing ae.py.
+        # Lets compaction children stop THIS runner via getppid(), without editing ae.py.
         env["AE_RUNNER"] = "1"
+        # Optional hint for skills that support multi-chat paths.
+        env["AE_INPUT_FILE"] = str(target)
+        env["AE_CONVERSATION_ID"] = cid
         # Patch subprocess in this process tree so tool calls do not flash consoles.
         prepend_pythonpath(env, noconsole_site_dir())
         # Prefer pythonw; also hide window if a console python is the only option.
@@ -208,8 +528,8 @@ def start_process():
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             startupinfo.wShowWindow = 0
-        _process = subprocess.Popen(
-            [agent_python(), str(AE_FILE), str(INPUT_FILE)],
+        proc = subprocess.Popen(
+            [agent_python(), str(AE_FILE), str(target)],
             cwd=str(ROOT),
             creationflags=creationflags,
             env=env,
@@ -219,7 +539,13 @@ def start_process():
             stderr=subprocess.DEVNULL,
             start_new_session=(os.name != "nt"),
         )
-        RUNNER_PID_FILE.write_text(str(_process.pid), encoding="ascii")
+        _ensure_runner_dir()
+        pid_path = _runner_pid_file(cid)
+        try:
+            pid_path.write_text(str(proc.pid), encoding="ascii")
+        except OSError:
+            pass
+        _runners[cid] = {"proc": proc, "pid": proc.pid, "file": target}
         return True
 
 
@@ -227,8 +553,8 @@ _server = None
 
 
 def shutdown_viewer():
-    """Stop runner (if any) and shut down this viewer HTTP process (current port)."""
-    stop_process()
+    """Stop all chat runners and shut down this viewer HTTP process (current port)."""
+    stop_all_processes()
     server = _server
     def _close():
         try:
@@ -241,15 +567,18 @@ def shutdown_viewer():
     return True
 
 
-def stop_process():
-    """Kill the ae.py runner tree. Returns True only if it looks stopped."""
-    global _process
+def stop_process(chat_id=None):
+    """Kill one chat's ae.py runner tree. Returns True only if it looks stopped."""
+    cid = (chat_id or current_chat_id() or "default").strip() or "default"
     with _process_lock:
-        pid = _runner_pid_unlocked()
+        pid = _runner_pid_unlocked(cid)
         if pid is None:
-            _process = None
+            _runners.pop(cid, None)
+            _clear_runner_pid_file(cid)
             return False
 
+        entry = _runners.get(cid) or {}
+        proc = entry.get("proc")
         stopped = False
         if os.name == "nt":
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
@@ -259,9 +588,9 @@ def stop_process():
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             ).returncode == 0
-            if not stopped and _process is not None and _process.poll() is None:
+            if not stopped and proc is not None and proc.poll() is None:
                 try:
-                    _process.terminate()
+                    proc.terminate()
                 except OSError:
                     pass
         else:
@@ -269,9 +598,9 @@ def stop_process():
                 os.killpg(os.getpgid(pid), signal.SIGTERM)
                 stopped = True
             except (ProcessLookupError, PermissionError):
-                if _process is not None and _process.poll() is None:
+                if proc is not None and proc.poll() is None:
                     try:
-                        _process.terminate()
+                        proc.terminate()
                         stopped = True
                     except OSError:
                         pass
@@ -281,12 +610,30 @@ def stop_process():
             stopped = True
 
         if stopped:
-            try:
-                RUNNER_PID_FILE.unlink()
-            except OSError:
-                pass
-            _process = None
+            _runners.pop(cid, None)
+            _clear_runner_pid_file(cid)
         return stopped
+
+
+def stop_all_processes():
+    """Stop every known chat runner (registry + pid files for current chats)."""
+    ids = set()
+    with _process_lock:
+        ids.update(_runners.keys())
+    try:
+        for path in ROOT.glob("input.json"):
+            ids.add("default")
+        for path in ROOT.glob("input_*.json"):
+            cid = _chat_id_from_filename(path.name)
+            if cid:
+                ids.add(cid)
+    except OSError:
+        pass
+    stopped_any = False
+    for cid in sorted(ids):
+        if stop_process(cid):
+            stopped_any = True
+    return stopped_any
 
 
 def simple_token_count(value):
@@ -504,21 +851,37 @@ def display_message(m):
 
 
 def load_cached():
-    st = INPUT_FILE.stat()
-    mtime = st.st_mtime
-    with _state_cache_lock:
-        if _state_cache["mtime"] != mtime or _state_cache["messages"] is None:
-            try:
-                data = read_input()
-            except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError, KeyError):
-                # ae.py rewrites input.json in place; a concurrent read can see a partial file.
-                if _state_cache["messages"] is not None:
-                    return _state_cache["mtime"], _state_cache["model"], _state_cache["messages"]
-                raise
-            body = data.get("json", {})
-            messages = chat_transcript(body)
-            _state_cache.update({"mtime": mtime, "messages": messages, "model": body.get("model", ""), "usage": None})
-        return mtime, _state_cache["model"], _state_cache["messages"]
+    while True:
+        input_file = INPUT_FILE
+        st = input_file.stat()
+        mtime = st.st_mtime
+        signature = (input_file, st.st_mtime_ns, st.st_size)
+        with _state_cache_lock:
+            # INPUT_FILE can change while a threaded state request is starting.
+            # Never populate the shared cache with data from the previous chat.
+            if input_file != INPUT_FILE:
+                continue
+            if _state_cache["signature"] != signature or _state_cache["messages"] is None:
+                try:
+                    data = read_input(input_file)
+                except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError, KeyError):
+                    # ae.py rewrites the transcript; a concurrent read can see a partial file.
+                    if _state_cache["messages"] is not None and _state_cache["file"] == input_file:
+                        return _state_cache["mtime"], _state_cache["model"], _state_cache["messages"]
+                    raise
+                if input_file != INPUT_FILE:
+                    continue
+                body = data.get("json", {})
+                messages = chat_transcript(body)
+                _state_cache.update({
+                    "signature": signature,
+                    "file": input_file,
+                    "mtime": mtime,
+                    "messages": messages,
+                    "model": body.get("model", ""),
+                    "usage": None,
+                })
+            return _state_cache["mtime"], _state_cache["model"], _state_cache["messages"]
 
 
 def state_payload(light_if_unchanged=False, since=None, after=None):
@@ -617,9 +980,121 @@ PAGE = r"""
 html[data-theme="dark"] .theme-toggle .theme-icon-light{display:none}
 html[data-theme="dark"] .theme-toggle .theme-icon-dark{display:block}
 
+
+
+
+
+
+
+:root{
+  --chat-rail-w:clamp(132px,15vw,220px);
+  --chat-rail-gap:clamp(8px,1.2vw,14px);
+  --chat-rail-space:calc(var(--chat-rail-w) + var(--chat-rail-gap) + 12px);
+}
+.app{padding-left:max(16px,var(--chat-rail-space));box-sizing:border-box}
+.chat-rail{position:fixed;left:var(--chat-rail-gap);top:var(--chat-rail-gap);bottom:auto;z-index:6;width:var(--chat-rail-w);max-width:calc(100vw - 24px);max-height:min(62vh,520px);display:flex;flex-direction:column;gap:0;padding:0;border:0;border-radius:0;background:transparent;backdrop-filter:none;-webkit-backdrop-filter:none;box-shadow:none;overflow:visible;pointer-events:auto}
+.chat-rail.busy{opacity:.86}
+.chat-rail-head{display:none}
+.chat-rail-body{display:flex;flex-direction:column;gap:clamp(6px,.8vw,10px);padding:0;min-height:0;flex:1 1 auto}
+.chat-search{position:relative;display:none}
+.chat-rail.has-search .chat-search{display:block}
+.chat-rail:not(.has-list) .chat-list{display:none}
+html.chat-solo-rail{
+  --chat-rail-w:44px;
+  --chat-rail-space:calc(44px + var(--chat-rail-gap) + 8px);
+}
+html.chat-solo-rail .chat-rail{max-height:none}
+.chat-search input{width:100%;box-sizing:border-box;border:0;background:transparent;color:var(--text);border-radius:0;padding:7px 4px 7px 26px;font:12px/1.3 system-ui,-apple-system,"Segoe UI",sans-serif;outline:none;border-bottom:1px solid color-mix(in srgb,var(--line) 75%,transparent);transition:border-color .15s ease}
+.chat-search input:focus{border-bottom-color:color-mix(in srgb,var(--accent) 60%,var(--line));box-shadow:none}
+.chat-search input::placeholder{color:var(--muted)}
+.chat-search-icon{position:absolute;left:4px;top:50%;transform:translateY(-50%);color:var(--muted);width:14px;height:14px;pointer-events:none}
+.chat-list{display:flex;flex-direction:column;gap:2px;overflow:auto;min-height:48px;max-height:min(42vh,340px);flex:1 1 auto;overscroll-behavior:contain;padding-right:1px;scrollbar-width:thin}
+.chat-list::-webkit-scrollbar{width:6px}
+.chat-list::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--muted) 30%,transparent);border-radius:999px}
+.chat-empty{color:var(--muted);font-size:12px;padding:12px 4px;text-align:left}
+.chat-item{position:relative;display:flex;align-items:center;gap:8px;border:0;background:transparent;color:var(--text);border-radius:10px;padding:8px 6px;text-align:left;cursor:pointer;width:100%;transition:background .15s ease,transform .15s ease}
+.chat-item:hover{background:color-mix(in srgb,var(--topbar-btn) 75%,transparent)}
+.chat-item:hover .chat-item-more{opacity:1}
+.chat-item.active{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.chat-item.running .chat-item-name::before{content:"";display:inline-block;width:7px;height:7px;margin-right:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent);vertical-align:middle}
+.chat-item.switching{opacity:.55}
+.chat-item-main{min-width:0;flex:1 1 auto;display:flex;flex-direction:column;gap:2px}
+.chat-item-name{font:600 12px/1.3 system-ui,-apple-system,"Segoe UI",sans-serif;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat-item-meta{font:11px/1.2 system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat-item-more{flex:0 0 auto;opacity:0;border:0;background:transparent;color:var(--muted);border-radius:8px;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:opacity .15s ease,background .15s ease,color .15s ease}
+.chat-item-more:hover{background:color-mix(in srgb,var(--topbar-btn) 85%,transparent);color:var(--text)}
+.chat-item-more svg{width:14px;height:14px}
+.chat-new{border:0;background:transparent;color:var(--accent);border-radius:999px;width:36px;height:36px;min-width:36px;padding:0;font:700 18px/1 system-ui,-apple-system,"Segoe UI",sans-serif;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:0;box-shadow:none;transition:background .15s ease,color .15s ease,transform .15s ease;align-self:flex-start}
+.chat-new:hover{background:color-mix(in srgb,var(--accent) 12%,transparent);filter:none;box-shadow:none}
+.chat-new:active{transform:translateY(1px) scale(.98)}
+.chat-new svg{width:16px;height:16px}
+.chat-new span{display:none}
+.chat-menu{position:fixed;z-index:20;min-width:148px;padding:6px;border:1px solid var(--line);border-radius:12px;background:color-mix(in srgb,var(--panel) 96%,transparent);backdrop-filter:blur(12px);box-shadow:0 16px 40px var(--shadow);display:none}
+.chat-menu.open{display:block;animation:chatPop .14s ease-out}
+.chat-menu button{width:100%;border:0;background:transparent;color:var(--text);border-radius:8px;padding:8px 10px;text-align:left;font:12px/1.3 system-ui,-apple-system,"Segoe UI",sans-serif;cursor:pointer;display:flex;align-items:center;gap:8px}
+.chat-menu button:hover{background:var(--topbar-btn)}
+.chat-menu button.danger{color:var(--danger)}
+.chat-modal-backdrop{position:fixed;inset:0;z-index:30;background:rgba(8,12,18,.42);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;padding:16px}
+.chat-modal-backdrop.open{display:flex;animation:chatFade .16s ease-out}
+.chat-modal{width:min(380px,100%);border:1px solid var(--line);border-radius:18px;background:var(--panel);box-shadow:0 24px 60px var(--shadow);padding:16px;transform-origin:center;animation:chatPop .16s ease-out}
+.chat-modal h3{margin:0 0 6px;font:700 15px/1.3 system-ui,-apple-system,"Segoe UI",sans-serif}
+.chat-modal p{margin:0 0 12px;color:var(--muted);font:12px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+.chat-modal input{width:100%;box-sizing:border-box;border:1px solid var(--line);background:var(--bg);color:var(--text);border-radius:12px;padding:10px 12px;font:13px/1.3 system-ui,-apple-system,"Segoe UI",sans-serif;outline:none}
+.chat-modal input:focus{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 16%,transparent)}
+.chat-modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+.chat-modal-actions button{border:1px solid var(--btn-border);background:var(--btn-bg);color:var(--btn-text);border-radius:999px;padding:8px 12px;font:600 12px/1 system-ui,-apple-system,"Segoe UI",sans-serif;cursor:pointer}
+.chat-modal-actions button.primary{border-color:transparent;background:var(--accent);color:#fff}
+.chat-modal-actions button:hover{filter:brightness(1.03)}
+.chat-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(12px);z-index:40;background:var(--toast-bg);color:var(--toast-fg);border-radius:999px;padding:10px 14px;font:12px/1.3 system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 10px 30px var(--shadow);opacity:0;pointer-events:none;transition:opacity .18s ease,transform .18s ease}
+.chat-toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.messages.chat-switching{opacity:.42;filter:blur(.4px);transition:opacity .18s ease,filter .18s ease}
+@keyframes chatPop{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:none}}
+@keyframes chatFade{from{opacity:0}to{opacity:1}}
+@media (max-width:1100px){
+  :root{--chat-rail-w:clamp(120px,17vw,190px)}
+}
+@media (max-width:820px){
+  :root{--chat-rail-w:clamp(108px,20vw,160px)}
+  .chat-item-meta{display:none}
+  .chat-item{padding:7px 4px}
+}
+@media (max-width:640px){
+  :root{--chat-rail-w:44px;--chat-rail-gap:8px;--chat-rail-space:calc(44px + 8px + 8px)}
+  .chat-search, .chat-rail.has-search .chat-search{display:none !important}
+  .chat-list, .chat-rail.has-list .chat-list{display:none !important}
+  .chat-new{width:36px;height:36px}
+  .chat-rail{max-height:none}
+}
+
 </style>
 </head>
 <body>
+<aside id="chatRail" class="chat-rail" aria-label="对话列表">
+  <div class="chat-rail-body">
+    <div class="chat-search">
+      <svg class="chat-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <input id="chatSearch" type="search" placeholder="搜索对话" autocomplete="off" spellcheck="false">
+    </div>
+    <div id="chatList" class="chat-list" role="list"></div>
+    <button id="chatNew" class="chat-new" type="button" title="新建对话" aria-label="新建对话">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+      <span>新建对话</span>
+    </button>
+  </div>
+</aside>
+<div id="chatMenu" class="chat-menu" role="menu" aria-hidden="true"></div>
+<div id="chatModal" class="chat-modal-backdrop" aria-hidden="true">
+  <div class="chat-modal" role="dialog" aria-modal="true" aria-labelledby="chatModalTitle">
+    <h3 id="chatModalTitle">新建对话</h3>
+    <p id="chatModalDesc">可留空自动命名。将创建为 input_名称.json，并复制默认配置。</p>
+    <input id="chatModalInput" type="text" maxlength="48" placeholder="例如：重构计划">
+    <div class="chat-modal-actions">
+      <button id="chatModalCancel" type="button">取消</button>
+      <button id="chatModalOk" class="primary" type="button">创建</button>
+    </div>
+  </div>
+</div>
+<div id="chatToast" class="chat-toast" role="status" aria-live="polite"></div>
 <main class="app">
   <section class="messages">
     <article class="msg model-message"><div class="model-meta"><div class="role">模型</div><div id="model" class="content">model</div></div><div class="model-actions"><button type="button" class="theme-toggle" id="themeToggle" title="切换亮/暗主题" aria-label="切换亮/暗主题"><span class="theme-icon-light" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></span><span class="theme-icon-dark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg></span></button><button id="killProcess" class="kill-process" type="button" title="关闭当前端口的查看器进程">关闭查看器</button></div></article>
@@ -649,7 +1124,7 @@ html[data-theme="dark"] .theme-toggle .theme-icon-dark{display:block}
 <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
 <script>
 const messagesEl=document.getElementById('messages'), emptyEl=document.getElementById('empty'), composer=document.getElementById('composer'), runBtn=document.getElementById('run'), msgInput=document.getElementById('message'), fileInput=document.getElementById('fileInput'), drop=document.getElementById('drop'), filesEl=document.getElementById('files'), usageText=document.getElementById('usageText'), tokenBar=document.getElementById('tokenBar'), runnerStatus=document.getElementById('runnerStatus'), runnerLabel=document.getElementById('runnerLabel'), newMessagesBtn=document.getElementById('newMessages'), killProcessBtn=document.getElementById('killProcess'), themeToggleBtn=document.getElementById('themeToggle');
-let selectedFiles=[], isRunning=false, phaseLabel='空闲', lastUpdated=0, messageCount=0, usageLoaded=false, usageLoading=false, unseenMessages=0, firstPaint=true, editInFlight=false;
+let selectedFiles=[], isRunning=false, phaseLabel='空闲', activeChatId='default', lastUpdated=0, messageCount=0, usageLoaded=false, usageLoading=false, usageGeneration=0, usageReloadQueued=false, unseenMessages=0, firstPaint=true, editInFlight=false;
 let pollTimer=null, pollInFlight=false, pollQueued=false, pollGeneration=0;
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -1066,6 +1541,7 @@ function requestFullResync(){
   pollGeneration++;
   messageCount=0;
   lastUpdated=0;
+  invalidateUsage();
   schedulePoll(0);
 }
 async function editLastUserMessage(el){
@@ -1080,7 +1556,7 @@ async function editLastUserMessage(el){
     const text=(data && typeof data.text==='string')?data.text:fallback;
     // Put the retracted user message back into the composer for editing.
     msgInput.value=text;
-    localStorage.setItem('ae-draft', msgInput.value);
+    writeDraft(msgInput.value);
     resizeComposer();
     updateRunLabel();
     msgInput.focus();
@@ -1153,7 +1629,7 @@ async function poll(){
       setRunningUi();
     }else{
       lastUpdated=data.updated||0;
-      usageLoaded=false;
+      invalidateUsage();
       render(data);
     }
   }catch(e){
@@ -1164,6 +1640,12 @@ async function poll(){
       pollQueued=false;
       schedulePoll(0);
     }else{
+      if(typeof loadChats==='function' && (isRunning || (Array.isArray(chatsCache)&&chatsCache.some(c=>c&&c.running)))){
+        if(!window.__aeChatRefreshAt || Date.now()-window.__aeChatRefreshAt>2500){
+          window.__aeChatRefreshAt=Date.now();
+          loadChats();
+        }
+      }
       schedulePoll(isRunning?500:1800);
     }
   }
@@ -1177,8 +1659,24 @@ fileInput.addEventListener('change',()=>{addFiles(fileInput.files);fileInput.val
 filesEl.addEventListener('click',e=>{if(e.target.dataset.i!==undefined){selectedFiles.splice(Number(e.target.dataset.i),1);refreshFiles()}});
 for(const event of ['dragenter','dragover'])document.addEventListener(event,e=>{if([...e.dataTransfer.types].includes('Files')){e.preventDefault();drop.classList.add('drag')}});
 for(const event of ['dragleave','drop'])document.addEventListener(event,e=>{if(event==='drop'&&e.dataTransfer?.files?.length){e.preventDefault();addFiles(e.dataTransfer.files)}drop.classList.remove('drag')});
-msgInput.value=localStorage.getItem('ae-draft')||'';resizeComposer();updateRunLabel();
-msgInput.addEventListener('input',()=>{localStorage.setItem('ae-draft',msgInput.value);resizeComposer();updateRunLabel()});
+function draftKey(id){return 'ae-draft:'+String(id||activeChatId||'default')}
+function readDraft(id){try{return localStorage.getItem(draftKey(id))||''}catch(e){return ''}}
+function writeDraft(val,id){try{localStorage.setItem(draftKey(id), String(val??''))}catch(e){}}
+function clearDraft(id){try{localStorage.removeItem(draftKey(id))}catch(e){}}
+function syncRunningFromCache(){
+  // Only UPGRADE active running state from the chat list (e.g. switch onto a
+  // background task). Downgrades are owned by /api/state polling so a slightly
+  // stale chats list cannot flip a just-finished task back to "运行中".
+  const row=(chatsCache||[]).find(c=>c && String(c.id)===String(activeChatId));
+  const run=!!(row && row.running);
+  if(run && !isRunning){
+    isRunning=true;
+    if(!phaseLabel || phaseLabel==='空闲') phaseLabel='运行中';
+    setRunningUi();
+  }
+}
+msgInput.value=readDraft();resizeComposer();updateRunLabel();
+msgInput.addEventListener('input',()=>{writeDraft(msgInput.value);resizeComposer();updateRunLabel()});
 msgInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&!isRunning){e.preventDefault();composer.requestSubmit()}});
 document.addEventListener('keydown',async e=>{if(e.key==='Escape'&&isRunning){e.preventDefault();await stopRunner(runBtn)}});
 newMessagesBtn.addEventListener('click',()=>{window.scrollTo({top:document.documentElement.scrollHeight,behavior:'smooth'});hideNewMessages()});
@@ -1198,12 +1696,40 @@ messagesEl.addEventListener('click',async e=>{
   button.disabled=true;button.textContent='加载中…';
   try{const r=await fetch('/api/tool-output?id='+encodeURIComponent(row.dataset.callId));if(!r.ok)throw new Error();const data=await r.json();out=document.createElement('pre');fillToolOutputEl(out, data.output||'(无输出)');row.appendChild(out);button.textContent='收起输出'}catch(err){button.textContent='加载失败'}finally{button.disabled=false}
 });
+function invalidateUsage(){
+  usageGeneration++;
+  usageLoaded=false;
+  usageReloadQueued=true;
+}
 async function loadUsage(){
-  if(usageLoaded||usageLoading)return;usageLoading=true;let stale=false;usageText.textContent='Token：计算中…';
-  try{const r=await fetch('/api/usage');if(!r.ok)throw new Error();const data=await r.json(), total=Number(data.usage?.estimated_total||0), limit=Number(data.context_limit||0), pct=limit?Math.round(total/limit*100):0;
+  if(usageLoaded)return;
+  if(usageLoading){usageReloadQueued=true;return}
+  usageLoading=true;
+  usageReloadQueued=false;
+  const generation=usageGeneration;
+  let stale=false;
+  usageText.textContent='Token：计算中…';
+  try{
+    const r=await fetch('/api/usage');
+    if(!r.ok)throw new Error();
+    const data=await r.json();
+    if(generation!==usageGeneration)return;
+    const total=Number(data.usage?.estimated_total||0), limit=Number(data.context_limit||0), pct=limit?Math.round(total/limit*100):0;
     usageText.textContent=limit?`估算 Token：${total.toLocaleString()} / ${limit.toLocaleString()} · ${pct}%`:`估算 Token：${total.toLocaleString()}`;
-    tokenBar.style.width=Math.min(100,pct)+'%';tokenBar.classList.toggle('warn',pct>=60&&pct<85);tokenBar.classList.toggle('danger',pct>=85);usageText.title=pct>=85?'上下文接近上限，建议压缩历史消息':'';stale=Number(data.updated||0)<lastUpdated;usageLoaded=!stale
-  }catch(e){usageText.textContent='Token：获取失败'}finally{usageLoading=false;if(stale)setTimeout(loadUsage,0)}
+    tokenBar.style.width=Math.min(100,pct)+'%';
+    tokenBar.classList.toggle('warn',pct>=60&&pct<85);
+    tokenBar.classList.toggle('danger',pct>=85);
+    usageText.title=pct>=85?'上下文接近上限，建议压缩历史消息':'';
+    stale=Number(data.updated||0)<lastUpdated;
+    usageLoaded=!stale;
+  }catch(e){
+    if(generation===usageGeneration)usageText.textContent='Token：获取失败';
+  }finally{
+    usageLoading=false;
+    const reload=usageReloadQueued||generation!==usageGeneration||stale;
+    usageReloadQueued=false;
+    if(reload&&!usageLoaded)setTimeout(loadUsage,0);
+  }
 }
 async function stopRunner(btn){
   if(!isRunning)return;
@@ -1237,8 +1763,398 @@ if(themeToggleBtn) themeToggleBtn.addEventListener('click',()=>toggleTheme());
 runBtn.addEventListener('click',async e=>{if(isRunning){e.preventDefault();await stopRunner(runBtn)}});
 composer.addEventListener('submit',async e=>{
   e.preventDefault();if(isRunning)return;const submitted=msgInput.value,fd=new FormData();fd.append('message',submitted);selectedFiles.forEach(f=>fd.append('files',f,f.name));runBtn.disabled=true;
-  try{const r=await fetch('/api/send',{method:'POST',body:fd});if(!r.ok)throw new Error(await r.text());if(msgInput.value===submitted){msgInput.value='';localStorage.removeItem('ae-draft');resizeComposer()}selectedFiles=[];refreshFiles();isRunning=true;phaseLabel='等待 AI';setRunningUi();schedulePoll(0)}catch(err){alert(err.message||'运行失败')}finally{runBtn.disabled=false}
+  try{const r=await fetch('/api/send',{method:'POST',body:fd});if(!r.ok)throw new Error(await r.text());if(msgInput.value===submitted){msgInput.value='';clearDraft();resizeComposer()}selectedFiles=[];refreshFiles();isRunning=true;phaseLabel='等待 AI';setRunningUi();schedulePoll(0)}catch(err){alert(err.message||'运行失败')}finally{runBtn.disabled=false}
 });
+
+
+const chatRailEl=document.getElementById('chatRail');
+const chatListEl=document.getElementById('chatList');
+const chatNewBtn=document.getElementById('chatNew');
+const chatSearchEl=document.getElementById('chatSearch');
+const chatMenuEl=document.getElementById('chatMenu');
+const chatModalEl=document.getElementById('chatModal');
+const chatModalTitleEl=document.getElementById('chatModalTitle');
+const chatModalDescEl=document.getElementById('chatModalDesc');
+const chatModalInputEl=document.getElementById('chatModalInput');
+const chatModalCancelBtn=document.getElementById('chatModalCancel');
+const chatModalOkBtn=document.getElementById('chatModalOk');
+const chatToastEl=document.getElementById('chatToast');
+let chatsCache=[];
+let chatsLoading=false;
+let chatsReloadQueued=false;
+let chatsLoadPromise=null;
+let chatBusy=false;
+let chatMenuId=null;
+let chatModalMode=null;
+let chatModalTargetId=null;
+let chatToastTimer=null;
+
+function relativeTime(ts){
+  if(!ts) return '';
+  const diff=Math.max(0,(Date.now()/1000)-Number(ts));
+  if(diff<60) return '刚刚';
+  if(diff<3600) return Math.floor(diff/60)+' 分钟前';
+  if(diff<86400) return Math.floor(diff/3600)+' 小时前';
+  if(diff<86400*30) return Math.floor(diff/86400)+' 天前';
+  const d=new Date(Number(ts)*1000);
+  return `${d.getMonth()+1}/${d.getDate()}`;
+}
+function showChatToast(msg){
+  if(!chatToastEl) return;
+  chatToastEl.textContent=String(msg||'');
+  chatToastEl.classList.add('show');
+  clearTimeout(chatToastTimer);
+  chatToastTimer=setTimeout(()=>chatToastEl.classList.remove('show'),1800);
+}
+function setChatBusy(on){
+  chatBusy=!!on;
+  if(chatRailEl) chatRailEl.classList.toggle('busy', chatBusy);
+}
+function closeChatMenu(){
+  chatMenuId=null;
+  if(!chatMenuEl) return;
+  chatMenuEl.classList.remove('open');
+  chatMenuEl.innerHTML='';
+  chatMenuEl.setAttribute('aria-hidden','true');
+}
+function openChatMenu(id, x, y){
+  if(!chatMenuEl) return;
+  chatMenuId=id;
+  const isDefault=id==='default';
+  chatMenuEl.innerHTML=`
+    <button type="button" data-act="rename" ${isDefault?'disabled style="opacity:.45;cursor:not-allowed"':''} role="menuitem">重命名</button>
+    <button type="button" data-act="delete" class="danger" ${isDefault?'disabled style="opacity:.45;cursor:not-allowed"':''} role="menuitem">删除</button>
+  `;
+  chatMenuEl.classList.add('open');
+  chatMenuEl.setAttribute('aria-hidden','false');
+  const pad=8;
+  const rect=chatMenuEl.getBoundingClientRect();
+  const left=Math.min(Math.max(pad, x), window.innerWidth-rect.width-pad);
+  const top=Math.min(Math.max(pad, y), window.innerHeight-rect.height-pad);
+  chatMenuEl.style.left=left+'px';
+  chatMenuEl.style.top=top+'px';
+}
+function closeChatModal(){
+  chatModalMode=null;
+  chatModalTargetId=null;
+  if(!chatModalEl) return;
+  chatModalEl.classList.remove('open');
+  chatModalEl.setAttribute('aria-hidden','true');
+  if(chatModalInputEl) chatModalInputEl.value='';
+}
+function openChatModal(mode, targetId, preset){
+  if(!chatModalEl) return;
+  chatModalMode=mode;
+  chatModalTargetId=targetId||null;
+  if(mode==='create'){
+    chatModalTitleEl.textContent='新建对话';
+    chatModalDescEl.textContent='可留空自动命名。将保存为 input_名称.json，并复制默认配置（不含历史消息）。';
+    chatModalOkBtn.textContent='创建';
+    chatModalInputEl.placeholder='例如：重构计划';
+    chatModalInputEl.value=preset||'';
+  }else{
+    chatModalTitleEl.textContent='重命名对话';
+    chatModalDescEl.textContent='将同步重命名对应的 input_名称.json 文件。';
+    chatModalOkBtn.textContent='保存';
+    chatModalInputEl.placeholder='新的对话名';
+    chatModalInputEl.value=preset||'';
+  }
+  chatModalEl.classList.add('open');
+  chatModalEl.setAttribute('aria-hidden','false');
+  setTimeout(()=>{chatModalInputEl.focus(); chatModalInputEl.select()}, 20);
+}
+function filteredChats(){
+  const q=(chatSearchEl&&chatSearchEl.value||'').trim().toLowerCase();
+  if(!q) return chatsCache.slice();
+  return chatsCache.filter(c=>String(c.name||c.id||'').toLowerCase().includes(q));
+}
+function updateChatRailMode(){
+  // Density rules:
+  //  - 0/1 chat: only the '+' control
+  //  - 2-3 chats: list, no search
+  //  - 4+ chats: list + search
+  const n = Array.isArray(chatsCache) ? chatsCache.length : 0;
+  const showList = n >= 2;
+  const showSearch = n >= 4;
+  if(chatRailEl){
+    chatRailEl.dataset.count = String(n);
+    chatRailEl.classList.toggle('has-list', showList);
+    chatRailEl.classList.toggle('has-search', showSearch);
+    chatRailEl.classList.toggle('solo', n <= 1);
+  }
+  document.documentElement.classList.toggle('chat-solo-rail', n <= 1);
+  if(!showSearch && chatSearchEl && chatSearchEl.value){
+    chatSearchEl.value = '';
+  }
+  if(chatSearchEl){
+    chatSearchEl.tabIndex = showSearch ? 0 : -1;
+    chatSearchEl.setAttribute('aria-hidden', showSearch ? 'false' : 'true');
+  }
+  if(chatListEl){
+    chatListEl.setAttribute('aria-hidden', showList ? 'false' : 'true');
+  }
+}
+function renderChatList(){
+  if(!chatListEl) return;
+  updateChatRailMode();
+  const items=filteredChats();
+  if(!items.length){
+    // When the full list is empty (0 chats) keep the rail clean; only show
+    // "no match" when search is active over existing chats.
+    if((chatsCache||[]).length === 0){
+      chatListEl.innerHTML='';
+      return;
+    }
+    chatListEl.innerHTML='<div class="chat-empty">没有匹配的对话</div>';
+    return;
+  }
+  chatListEl.innerHTML=items.map(c=>{
+    const id=String(c.id||'default');
+    const name=String(c.name||id);
+    const active=!!c.active || id===activeChatId;
+    if(active) activeChatId=id;
+    const isRun=!!c.running;
+    const meta=isRun ? '运行中' : relativeTime(c.mtime);
+    return `<div class="chat-item${active?' active':''}${isRun?' running':''}" data-chat-id="${esc(id)}" role="listitem" title="${esc(name)}${isRun?' · 运行中':''}">
+      <div class="chat-item-main">
+        <div class="chat-item-name">${esc(name)}</div>
+        <div class="chat-item-meta">${esc(meta|| (id==='default'?'主对话':'对话'))}</div>
+      </div>
+      <button type="button" class="chat-item-more" data-chat-more="${esc(id)}" title="更多" aria-label="更多操作">
+        <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+      </button>
+    </div>`;
+  }).join('');
+}
+async function loadChats(){
+  if(!chatListEl) return;
+  if(chatsLoading){
+    chatsReloadQueued=true;
+    return chatsLoadPromise;
+  }
+  chatsLoading=true;
+  const task=(async()=>{
+    do{
+      chatsReloadQueued=false;
+      try{
+        const r=await fetch('/api/chats');
+        if(!r.ok) throw new Error(await r.text());
+        const data=await r.json();
+        if(data && data.active) activeChatId=data.active;
+        chatsCache=Array.isArray(data.chats)?data.chats:[];
+        renderChatList();
+        syncRunningFromCache();
+      }catch(err){
+        console.warn('load chats failed', err);
+      }
+    }while(chatsReloadQueued);
+  })();
+  chatsLoadPromise=task;
+  try{
+    await task;
+  }finally{
+    if(chatsLoadPromise===task){
+      chatsLoading=false;
+      chatsLoadPromise=null;
+    }
+  }
+}
+function resetComposerLocal(opts){
+  const clear= !opts || opts.clearDraft!==false;
+  if(clear) clearDraft();
+  msgInput.value= clear ? '' : readDraft();
+  resizeComposer();
+  selectedFiles=[];
+  refreshFiles();
+  usageLoaded=false;
+  // Avoid carrying the previous chat's running button state until /api/state arrives.
+  isRunning=false;
+  phaseLabel='空闲';
+  setRunningUi();
+}
+function playSwitchVisual(){
+  const box=document.querySelector('.messages');
+  if(!box) return;
+  box.classList.add('chat-switching');
+  setTimeout(()=>box.classList.remove('chat-switching'), 220);
+}
+async function selectChat(id){
+  if(!id || id===activeChatId || chatBusy) return;
+  setChatBusy(true);
+  playSwitchVisual();
+  try{
+    writeDraft(msgInput.value, activeChatId);
+    const r=await fetch('/api/chats/select',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+    if(!r.ok) throw new Error(await r.text());
+    const data=await r.json();
+    activeChatId=data.active||id;
+    if(Array.isArray(data.chats)) chatsCache=data.chats;
+    resetComposerLocal({clearDraft:false});
+    requestFullResync();
+    loadUsage();
+    await loadChats();
+    syncRunningFromCache();
+    showChatToast('已切换对话');
+  }catch(err){
+    showChatToast(err.message||'切换失败');
+  }finally{
+    setChatBusy(false);
+  }
+}
+async function createChat(name){
+  if(chatBusy) return;
+  const trimmed=String(name||'').trim();
+  setChatBusy(true);
+  playSwitchVisual();
+  try{
+    writeDraft(msgInput.value, activeChatId);
+    const r=await fetch('/api/chats',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:trimmed})});
+    if(!r.ok) throw new Error(await r.text());
+    const data=await r.json();
+    activeChatId=(data.chat&&data.chat.id)||trimmed;
+    if(Array.isArray(data.chats)) chatsCache=data.chats;
+    resetComposerLocal({clearDraft:true});
+    requestFullResync();
+    loadUsage();
+    await loadChats();
+    syncRunningFromCache();
+    closeChatModal();
+    showChatToast('已创建对话');
+  }catch(err){
+    showChatToast(err.message||'创建失败');
+  }finally{
+    setChatBusy(false);
+  }
+}
+async function renameChat(id, name){
+  const trimmed=String(name||'').trim();
+  if(!id || !trimmed || chatBusy) return;
+  setChatBusy(true);
+  try{
+    const r=await fetch('/api/chats/rename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,name:trimmed})});
+    if(!r.ok) throw new Error(await r.text());
+    const data=await r.json();
+    const newId=(data.chat&&data.chat.id)||trimmed;
+    // Migrate per-chat draft key when this conversation is renamed.
+    try{
+      const oldDraft=readDraft(id);
+      if(oldDraft){writeDraft(oldDraft, newId); clearDraft(id)}
+    }catch(e){}
+    if(data && data.active) activeChatId=data.active;
+    else if(id===activeChatId) activeChatId=newId;
+    await loadChats();
+    closeChatModal();
+    showChatToast('已重命名');
+  }catch(err){
+    showChatToast(err.message||'重命名失败');
+  }finally{
+    setChatBusy(false);
+  }
+}
+async function deleteChat(id){
+  if(!id || id==='default' || chatBusy) return;
+  const beforeActive=activeChatId;
+  const wasActive=id===beforeActive;
+  setChatBusy(true);
+  if(wasActive)playSwitchVisual();
+  try{
+    const r=await fetch('/api/chats/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+    if(!r.ok) throw new Error(await r.text());
+    const data=await r.json();
+    clearDraft(id);
+    if(data && data.active) activeChatId=data.active;
+    if(wasActive || activeChatId!==beforeActive){
+      resetComposerLocal({clearDraft:false});
+      requestFullResync();
+      loadUsage();
+    }
+    await loadChats();
+    syncRunningFromCache();
+    showChatToast('已删除对话');
+  }catch(err){
+    showChatToast(err.message||'删除失败');
+  }finally{
+    setChatBusy(false);
+  }
+}
+async function submitChatModal(){
+  const val=(chatModalInputEl&&chatModalInputEl.value||'').trim();
+  if(chatModalMode==='create'){
+    await createChat(val); // empty => auto name
+    return;
+  }
+  if(chatModalMode==='rename'){
+    if(!val){showChatToast('请输入名称');return}
+    await renameChat(chatModalTargetId,val);
+  }
+}
+if(chatListEl){
+  chatListEl.addEventListener('click',(e)=>{
+    const more=e.target.closest('[data-chat-more]');
+    if(more){
+      e.preventDefault();
+      e.stopPropagation();
+      const id=more.getAttribute('data-chat-more');
+      const rect=more.getBoundingClientRect();
+      openChatMenu(id, rect.right+4, rect.top);
+      return;
+    }
+    const item=e.target.closest('[data-chat-id]');
+    if(!item) return;
+    selectChat(item.getAttribute('data-chat-id'));
+  });
+  chatListEl.addEventListener('contextmenu',(e)=>{
+    const item=e.target.closest('[data-chat-id]');
+    if(!item) return;
+    e.preventDefault();
+    openChatMenu(item.getAttribute('data-chat-id'), e.clientX, e.clientY);
+  });
+}
+if(chatMenuEl){
+  chatMenuEl.addEventListener('click',(e)=>{
+    const btn=e.target.closest('button[data-act]');
+    if(!btn || btn.disabled) return;
+    const act=btn.getAttribute('data-act');
+    const id=chatMenuId;
+    closeChatMenu();
+    if(!id) return;
+    if(act==='rename'){
+      const cur=(chatsCache.find(c=>c.id===id)||{}).name||id;
+      openChatModal('rename', id, cur);
+    }else if(act==='delete'){
+      deleteChat(id);
+    }
+  });
+}
+if(chatNewBtn) chatNewBtn.addEventListener('click',()=>createChat(''));
+if(chatSearchEl) chatSearchEl.addEventListener('input',()=>renderChatList());
+if(chatModalCancelBtn) chatModalCancelBtn.addEventListener('click', closeChatModal);
+if(chatModalOkBtn) chatModalOkBtn.addEventListener('click', submitChatModal);
+if(chatModalInputEl){
+  chatModalInputEl.addEventListener('keydown',(e)=>{
+    if(e.key==='Enter'){e.preventDefault();submitChatModal()}
+    if(e.key==='Escape'){e.preventDefault();closeChatModal()}
+  });
+}
+if(chatModalEl){
+  chatModalEl.addEventListener('click',(e)=>{
+    if(e.target===chatModalEl) closeChatModal();
+  });
+}
+document.addEventListener('click',(e)=>{
+  if(!chatMenuEl||!chatMenuEl.classList.contains('open')) return;
+  if(chatMenuEl.contains(e.target)) return;
+  if(e.target.closest && e.target.closest('[data-chat-more]')) return;
+  closeChatMenu();
+});
+document.addEventListener('keydown',(e)=>{
+  if(e.key==='Escape'){
+    closeChatMenu();
+    closeChatModal();
+  }
+});
+loadChats();
+
 schedulePoll(0);
 </script>
 </body>
@@ -1283,6 +2199,8 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 pass
             return self.send_json(state_payload(light_if_unchanged=True, since=since, after=after))
+        if path == "/api/chats":
+            return self.send_json({"chats": list_chats(), "active": current_chat_id()})
         if path == "/api/usage":
             return self.send_json(usage_payload())
         if path == "/api/tool-output":
@@ -1313,31 +2231,92 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         try:
             if path == "/api/send":
-                if running():
-                    return self.send_text("process is already running", 409)
+                # Parallel multi-chat: only block if THIS active chat already has a runner.
                 text, files = parse_multipart(self)
                 with _send_lock:
-                    if running():
+                    cid = current_chat_id()
+                    target = INPUT_FILE
+                    if running(cid):
                         return self.send_text("process is already running", 409)
                     appended = bool(text.strip() or files)
                     if appended:
                         append_user_message(text, files)
-                    if not start_process():
+                    if not start_process(cid, target):
                         return self.send_text("process could not be started", 409)
                 return self.send_json({"ok": True, "message_appended": appended})
             if path == "/api/stop":
                 with _send_lock:
-                    stopped = stop_process()
+                    stopped = stop_process(current_chat_id())
                 return self.send_json({"stopped": stopped})
             if path == "/api/retract-last-user":
                 with _send_lock:
-                    if running():
-                        stop_process()
+                    if running(current_chat_id()):
+                        stop_process(current_chat_id())
                     try:
                         text = pop_last_user_message()
                     except ValueError as exc:
                         return self.send_text(str(exc), 409)
                 return self.send_json({"ok": True, "text": text})
+            if path == "/api/chats":
+                length = int(self.headers.get("Content-Length", "0") or 0)
+                raw = self.rfile.read(length) if length > 0 else b"{}"
+                try:
+                    payload = json.loads(raw.decode("utf-8") or "{}")
+                except json.JSONDecodeError:
+                    return self.send_text("invalid json", 400)
+                name = (payload or {}).get("name", "")
+                try:
+                    chat = create_chat(name)
+                except ValueError as exc:
+                    return self.send_text(str(exc), 409)
+                except FileNotFoundError as exc:
+                    return self.send_text(str(exc), 404)
+                return self.send_json({"ok": True, "chat": chat, "active": current_chat_id(), "chats": list_chats()})
+
+            if path == "/api/chats/rename":
+                length = int(self.headers.get("Content-Length", "0") or 0)
+                raw = self.rfile.read(length) if length > 0 else b"{}"
+                try:
+                    payload = json.loads(raw.decode("utf-8") or "{}")
+                except json.JSONDecodeError:
+                    return self.send_text("invalid json", 400)
+                try:
+                    chat = rename_chat((payload or {}).get("id", ""), (payload or {}).get("name", ""))
+                except ValueError as exc:
+                    return self.send_text(str(exc), 409)
+                except FileNotFoundError as exc:
+                    return self.send_text(str(exc), 404)
+                return self.send_json({"ok": True, "chat": chat, "active": current_chat_id(), "chats": list_chats()})
+            if path == "/api/chats/delete":
+                length = int(self.headers.get("Content-Length", "0") or 0)
+                raw = self.rfile.read(length) if length > 0 else b"{}"
+                try:
+                    payload = json.loads(raw.decode("utf-8") or "{}")
+                except json.JSONDecodeError:
+                    return self.send_text("invalid json", 400)
+                try:
+                    result = delete_chat((payload or {}).get("id", ""))
+                except ValueError as exc:
+                    return self.send_text(str(exc), 409)
+                except FileNotFoundError as exc:
+                    return self.send_text(str(exc), 404)
+                return self.send_json({"ok": True, **result, "chats": list_chats()})
+
+            if path == "/api/chats/select":
+                length = int(self.headers.get("Content-Length", "0") or 0)
+                raw = self.rfile.read(length) if length > 0 else b"{}"
+                try:
+                    payload = json.loads(raw.decode("utf-8") or "{}")
+                except json.JSONDecodeError:
+                    return self.send_text("invalid json", 400)
+                chat_id = (payload or {}).get("id", "default")
+                try:
+                    active = set_active_chat(chat_id)
+                except ValueError as exc:
+                    return self.send_text(str(exc), 400)
+                except FileNotFoundError as exc:
+                    return self.send_text(str(exc), 404)
+                return self.send_json({"ok": True, "active": active, "chats": list_chats()})
             if path == "/api/shutdown":
                 with _send_lock:
                     shutdown_viewer()
@@ -1349,6 +2328,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     os.chdir(ROOT)
+    _restore_active_input()
 
     def port_is_free(port):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -1368,6 +2348,6 @@ if __name__ == "__main__":
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        stop_process()
+        stop_all_processes()
     finally:
         _server = None

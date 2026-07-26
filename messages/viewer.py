@@ -1089,11 +1089,123 @@ html[data-theme="dark"] .theme-toggle .theme-icon-dark{display:block}
 .chat-search{position:relative;display:none}
 .chat-rail.has-search .chat-search{display:block}
 .chat-rail:not(.has-list) .chat-list{display:none}
-html.chat-solo-rail{
+/* Narrow rail: square chat tiles (viewport <=640 or forced) */
+html.chat-rail-narrow{
   --chat-rail-w:44px;
   --chat-rail-space:calc(44px + var(--chat-rail-gap) + 8px);
 }
-html.chat-solo-rail .chat-rail{max-height:none}
+html.chat-rail-narrow .chat-rail{max-height:none}
+html.chat-rail-narrow .chat-search,
+html.chat-rail-narrow .chat-rail.has-search .chat-search{display:none !important}
+html.chat-rail-narrow .chat-list{
+  display:flex !important;
+  flex-direction:column;
+  align-items:center;
+  gap:6px;
+  overflow:auto;
+  min-height:0;
+  max-height:min(52vh,420px);
+  padding:0;
+  scrollbar-width:thin;
+}
+html.chat-rail-narrow .chat-item{
+  position:relative;
+  width:36px;
+  height:36px;
+  min-width:36px;
+  padding:0;
+  gap:0;
+  border-radius:10px;
+  justify-content:center;
+  align-items:center;
+}
+html.chat-rail-narrow .chat-item-main{display:none}
+html.chat-rail-narrow .chat-item-more{display:none}
+html.chat-rail-narrow .chat-item-tile{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:100%;
+  height:100%;
+  font:700 13px/1 system-ui,-apple-system,"Segoe UI",sans-serif;
+  color:var(--text);
+  user-select:none;
+  pointer-events:none;
+}
+html.chat-rail-narrow .chat-item.active{
+  background:color-mix(in srgb,var(--accent) 18%,transparent);
+  box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--accent) 55%,transparent);
+}
+html.chat-rail-narrow .chat-item.running .chat-item-tile::after{
+  content:"";
+  position:absolute;
+  top:3px;right:3px;
+  width:7px;height:7px;
+  border-radius:50%;
+  background:var(--accent);
+  box-shadow:0 0 0 2px color-mix(in srgb,var(--panel) 80%,transparent);
+}
+html.chat-rail-narrow .chat-new{
+  width:36px;height:36px;min-width:36px;
+  align-self:center;
+}
+/* Single/empty chat: no side rail chrome — keep '+' top-left over content */
+html.chat-solo-rail,
+html.chat-empty-rail{
+  --chat-rail-w:0px;
+  --chat-rail-space:16px;
+}
+html.chat-solo-rail .chat-rail,
+html.chat-empty-rail .chat-rail{
+  left:var(--chat-rail-gap);
+  right:auto;
+  top:var(--chat-rail-gap);
+  bottom:auto;
+  width:auto;
+  max-width:none;
+  max-height:none;
+  pointer-events:none;
+}
+html.chat-solo-rail .chat-rail-body,
+html.chat-empty-rail .chat-rail-body{pointer-events:none}
+html.chat-solo-rail .chat-list,
+html.chat-empty-rail .chat-list,
+html.chat-solo-rail .chat-search,
+html.chat-empty-rail .chat-search{display:none !important}
+html.chat-solo-rail .chat-new,
+html.chat-empty-rail .chat-new{
+  pointer-events:auto;
+  width:36px;height:36px;min-width:36px;
+  border-radius:0;
+  background:transparent;
+  border:0;
+  box-shadow:none;
+  color:var(--accent);
+  backdrop-filter:none;
+  -webkit-backdrop-filter:none;
+  filter:none;
+  transition:filter .15s ease, transform .15s ease, background .15s ease;
+}
+html.chat-solo-rail .chat-new:hover,
+html.chat-empty-rail .chat-new:hover{
+  background:transparent;
+  border:0;
+  filter:none;
+}
+/* Shadow only when the '+' actually overlaps message content */
+html.chat-solo-rail .chat-new.is-over-content,
+html.chat-empty-rail .chat-new.is-over-content{
+  filter:drop-shadow(0 1px 1px color-mix(in srgb,var(--bg) 88%,transparent))
+         drop-shadow(0 0 2px color-mix(in srgb,var(--bg) 70%,transparent))
+         drop-shadow(0 2px 6px color-mix(in srgb,var(--text) 28%,transparent));
+}
+html.chat-solo-rail .chat-new.is-over-content:hover,
+html.chat-empty-rail .chat-new.is-over-content:hover{
+  filter:drop-shadow(0 1px 1px color-mix(in srgb,var(--bg) 90%,transparent))
+         drop-shadow(0 0 3px color-mix(in srgb,var(--bg) 75%,transparent))
+         drop-shadow(0 3px 8px color-mix(in srgb,var(--text) 34%,transparent));
+}
+.chat-item-tile{display:none}
 .chat-search input{width:100%;box-sizing:border-box;border:0;background:transparent;color:var(--text);border-radius:0;padding:7px 4px 7px 26px;font:12px/1.3 system-ui,-apple-system,"Segoe UI",sans-serif;outline:none;border-bottom:1px solid color-mix(in srgb,var(--line) 75%,transparent);transition:border-color .15s ease}
 .chat-search input:focus{border-bottom-color:color-mix(in srgb,var(--accent) 60%,var(--line));box-shadow:none}
 .chat-search input::placeholder{color:var(--muted)}
@@ -1149,11 +1261,50 @@ html.chat-solo-rail .chat-rail{max-height:none}
   .chat-item{padding:7px 4px}
 }
 @media (max-width:640px){
-  :root{--chat-rail-w:44px;--chat-rail-gap:8px;--chat-rail-space:calc(44px + 8px + 8px)}
-  .chat-search, .chat-rail.has-search .chat-search{display:none !important}
-  .chat-list, .chat-rail.has-list .chat-list{display:none !important}
-  .chat-new{width:36px;height:36px}
-  .chat-rail{max-height:none}
+  html:not(.chat-solo-rail):not(.chat-empty-rail){
+    --chat-rail-w:44px;
+    --chat-rail-gap:8px;
+    --chat-rail-space:calc(44px + 8px + 8px);
+  }
+  /* Pre-JS / SSR-safe: treat multi-chat as narrow tiles at small widths */
+  html:not(.chat-solo-rail):not(.chat-empty-rail) .chat-search,
+  html:not(.chat-solo-rail):not(.chat-empty-rail) .chat-rail.has-search .chat-search{display:none !important}
+  html:not(.chat-solo-rail):not(.chat-empty-rail) .chat-list{
+    display:flex !important;
+    flex-direction:column;
+    align-items:center;
+    gap:6px;
+    overflow:auto;
+    min-height:0;
+    max-height:min(52vh,420px);
+    padding:0;
+  }
+  html:not(.chat-solo-rail):not(.chat-empty-rail) .chat-item{
+    position:relative;
+    width:36px;height:36px;min-width:36px;padding:0;gap:0;
+    border-radius:10px;justify-content:center;align-items:center;
+  }
+  html:not(.chat-solo-rail):not(.chat-empty-rail) .chat-item-main{display:none}
+  html:not(.chat-solo-rail):not(.chat-empty-rail) .chat-item-more{display:none}
+  html:not(.chat-solo-rail):not(.chat-empty-rail) .chat-item-tile{
+    display:inline-flex;align-items:center;justify-content:center;
+    width:100%;height:100%;
+    font:700 13px/1 system-ui,-apple-system,"Segoe UI",sans-serif;
+    color:var(--text);user-select:none;pointer-events:none;
+  }
+  html:not(.chat-solo-rail):not(.chat-empty-rail) .chat-item.active{
+    background:color-mix(in srgb,var(--accent) 18%,transparent);
+    box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--accent) 55%,transparent);
+  }
+  html:not(.chat-solo-rail):not(.chat-empty-rail) .chat-item.running .chat-item-tile::after{
+    content:"";position:absolute;top:3px;right:3px;width:7px;height:7px;border-radius:50%;
+    background:var(--accent);
+    box-shadow:0 0 0 2px color-mix(in srgb,var(--panel) 80%,transparent);
+  }
+  html:not(.chat-solo-rail):not(.chat-empty-rail) .chat-new{
+    width:36px;height:36px;min-width:36px;align-self:center;
+  }
+  html:not(.chat-solo-rail):not(.chat-empty-rail) .chat-rail{max-height:none}
 }
 
 </style>
@@ -1685,6 +1836,7 @@ function render(data){
   applyMessages(data);
   emptyEl.classList.toggle('hidden', messageCount>0);
   if(!usageLoaded)loadUsage();
+  if(typeof scheduleSoloPlusOverlap==='function') scheduleSoloPlusOverlap();
 }
 function schedulePoll(delay){
   // If a poll is already in flight, just ask for another pass after it finishes.
@@ -1958,32 +2110,111 @@ function filteredChats(){
   if(!q) return chatsCache.slice();
   return chatsCache.filter(c=>String(c.name||c.id||'').toLowerCase().includes(q));
 }
+function chatTileLabel(name, id){
+  const s = String(name || id || '').trim();
+  if(!s) return '?';
+  const m = s.match(/[\u4e00-\u9fffA-Za-z0-9]/);
+  return m ? m[0].toUpperCase() : s[0];
+}
 function updateChatRailMode(){
   // Density rules:
-  //  - 0/1 chat: only the '+' control
-  //  - 2-3 chats: list, no search
+  //  - 0 chats: floating '+' only (no side rail)
+  //  - 1 chat: floating '+' over messages (no side rail / no tile)
+  //  - 2-3 chats: full list, no search
   //  - 4+ chats: list + search
+  //  - viewport <=640px and 2+ chats: square tiles in left rail (always show items)
   const n = Array.isArray(chatsCache) ? chatsCache.length : 0;
+  const isEmpty = n === 0;
+  const isSolo = n === 1;
   const showList = n >= 2;
   const showSearch = n >= 4;
+  const forceNarrow = (typeof window !== 'undefined') && window.matchMedia && window.matchMedia('(max-width:640px)').matches;
+  const useNarrow = forceNarrow && n >= 2;
   if(chatRailEl){
     chatRailEl.dataset.count = String(n);
     chatRailEl.classList.toggle('has-list', showList);
-    chatRailEl.classList.toggle('has-search', showSearch);
-    chatRailEl.classList.toggle('solo', n <= 1);
+    chatRailEl.classList.toggle('has-search', showSearch && !useNarrow);
+    chatRailEl.classList.toggle('solo', isSolo);
+    chatRailEl.classList.toggle('empty', isEmpty);
+    chatRailEl.classList.toggle('narrow', useNarrow);
   }
-  document.documentElement.classList.toggle('chat-solo-rail', n <= 1);
-  if(!showSearch && chatSearchEl && chatSearchEl.value){
+  const root = document.documentElement;
+  root.classList.toggle('chat-solo-rail', isSolo);
+  root.classList.toggle('chat-empty-rail', isEmpty);
+  root.classList.toggle('chat-rail-narrow', useNarrow);
+  if((!showSearch || useNarrow) && chatSearchEl && chatSearchEl.value){
     chatSearchEl.value = '';
   }
   if(chatSearchEl){
-    chatSearchEl.tabIndex = showSearch ? 0 : -1;
-    chatSearchEl.setAttribute('aria-hidden', showSearch ? 'false' : 'true');
+    const searchOn = showSearch && !useNarrow;
+    chatSearchEl.tabIndex = searchOn ? 0 : -1;
+    chatSearchEl.setAttribute('aria-hidden', searchOn ? 'false' : 'true');
   }
   if(chatListEl){
     chatListEl.setAttribute('aria-hidden', showList ? 'false' : 'true');
   }
+  if(typeof scheduleSoloPlusOverlap==='function') scheduleSoloPlusOverlap();
 }
+
+/* chat-rail-narrow-resize */
+if(typeof window!=='undefined'){
+  let _railNarrowMQ = window.matchMedia ? window.matchMedia('(max-width:640px)') : null;
+  const _onRailNarrowChange = ()=>{ try{ if(typeof renderChatList==='function') renderChatList(); else updateChatRailMode(); }catch(_){ } };
+  if(_railNarrowMQ){
+    if(_railNarrowMQ.addEventListener) _railNarrowMQ.addEventListener('change', _onRailNarrowChange);
+    else if(_railNarrowMQ.addListener) _railNarrowMQ.addListener(_onRailNarrowChange);
+  }
+}
+/* solo '+' overlap shadow: only when it covers message content */
+function updateSoloPlusOverlap(){
+  const btn = (typeof chatNewEl!=='undefined' && chatNewEl) ? chatNewEl : document.getElementById('chatNew');
+  if(!btn) return;
+  const root = document.documentElement;
+  const floating = root.classList.contains('chat-solo-rail') || root.classList.contains('chat-empty-rail');
+  if(!floating){
+    btn.classList.remove('is-over-content');
+    return;
+  }
+  const br = btn.getBoundingClientRect();
+  if(br.width < 1 || br.height < 1){
+    btn.classList.remove('is-over-content');
+    return;
+  }
+  const cx = (br.left + br.right) / 2;
+  const cy = (br.top + br.bottom) / 2;
+  let over = false;
+  // Sample center + corners lightly so partial overlap still counts
+  const pts = [[cx,cy],[br.left+4,br.top+4],[br.right-4,br.top+4],[br.left+4,br.bottom-4],[br.right-4,br.bottom-4]];
+  for(const [x,y] of pts){
+    const stack = (document.elementsFromPoint ? document.elementsFromPoint(x,y) : []);
+    for(const el of stack){
+      if(!el || el===btn || btn.contains(el)) continue;
+      if(el.closest && (el.closest('.msg') || el.closest('.message') || el.closest('.message-list') || el.closest('.messages') || el.closest('.model-message') || el.closest('.user-message') || el.closest('.tool-message'))){
+        // Ignore empty messages chrome that is just the scrolling page background:
+        // require a real content node (not the messages container itself alone at bg)
+        if(el===document.documentElement || el===document.body) continue;
+        if(el.classList && (el.classList.contains('messages') || el.classList.contains('message-list') || el.classList.contains('app'))) continue;
+        over = true;
+        break;
+      }
+    }
+    if(over) break;
+  }
+  btn.classList.toggle('is-over-content', over);
+}
+let _soloPlusOverlapRaf = 0;
+function scheduleSoloPlusOverlap(){
+  if(_soloPlusOverlapRaf) return;
+  _soloPlusOverlapRaf = requestAnimationFrame(()=>{
+    _soloPlusOverlapRaf = 0;
+    try{ updateSoloPlusOverlap(); }catch(_){ }
+  });
+}
+if(typeof window!=='undefined'){
+  window.addEventListener('scroll', scheduleSoloPlusOverlap, {passive:true, capture:true});
+  window.addEventListener('resize', scheduleSoloPlusOverlap, {passive:true});
+}
+
 function renderChatList(){
   if(!chatListEl) return;
   updateChatRailMode();
@@ -2006,6 +2237,7 @@ function renderChatList(){
     const isRun=!!c.running;
     const meta=isRun ? '运行中' : relativeTime(c.mtime);
     return `<div class="chat-item${active?' active':''}${isRun?' running':''}" data-chat-id="${esc(id)}" role="listitem" title="${esc(name)}${isRun?' · 运行中':''}">
+      <span class="chat-item-tile" aria-hidden="true">${esc(chatTileLabel(name, id))}</span>
       <div class="chat-item-main">
         <div class="chat-item-name">${esc(name)}</div>
         <div class="chat-item-meta">${esc(meta|| (id==='default'?'主对话':'对话'))}</div>
@@ -2015,6 +2247,7 @@ function renderChatList(){
       </button>
     </div>`;
   }).join('');
+  if(typeof scheduleSoloPlusOverlap==='function') scheduleSoloPlusOverlap();
 }
 async function loadChats(){
   if(!chatListEl) return;

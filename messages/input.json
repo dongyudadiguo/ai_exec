@@ -38,6 +38,16 @@
       "type": "auto",
       "disable_parallel_tool_use": true
     },
-    "messages": []
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "[Compacted context summary; archived messages were replaced locally]\n\n活跃目标: 维护 ai_exec 多运行器项目（messages/responses/chat_completions 三个 ae.py 变体）。\n\n已完成:\n- 将 responses/skills/context_compaction 复制并适配到 messages/skills/context_compaction\n- 适配要点:\n  - Messages API: json.system 顶层字段（不参与压缩），json.messages 为消息列表\n  - Tool call/result: assistant 消息内 tool_use block，user 消息内 tool_result block\n  - 新增 _is_tool_result() 区分真实用户消息与工具结果消息\n  - 新增 _splice_summary() 处理 role 交替规则，summary 与首条 retained 消息 role 相同时合并 block\n  - __init__.py 直接复用（接口不变）\n\n项目结构:\n- C:/Users/12159/Desktop/ai_exec/messages/ — Anthropic Messages API 运行器\n- C:/Users/12159/Desktop/ai_exec/responses/ — Responses API 运行器\n- C:/Users/12159/Desktop/ai_exec/chat_completions/ — Chat Completions 运行器\n- 每个运行器均有 ae.py, viewer.py, view.vbs, skills/\n\n确认事项:\n- Python 工具调用非作用域隔离（共享全局命名空间）"
+          }
+        ]
+      }
+    ]
   }
 }

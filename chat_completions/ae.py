@@ -1,11 +1,14 @@
 import json
-import subprocess
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
-from sys import argv, executable
+from sys import argv
 
 import requests
 
 f = Path(argv[1])
+_ns = {}
+
 while True:
     data = json.loads(f.read_text(encoding="utf-8"))
     body = data["json"]
@@ -15,7 +18,9 @@ while True:
     if not message.get("tool_calls"):
         break
     for call in message["tool_calls"]:
-        stdout = subprocess.run([executable, "-c", json.loads(call["function"]["arguments"])["code"]], text=True, errors="ignore", stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout
+        out = StringIO()
+        with redirect_stdout(out), redirect_stderr(out):
+            exec(json.loads(call["function"]["arguments"])["code"], _ns)
         data = json.loads(f.read_text(encoding="utf-8")); body = data["json"]
-        body["messages"].append({"role": "tool", "tool_call_id": call["id"], "content": stdout})
+        body["messages"].append({"role": "tool", "tool_call_id": call["id"], "content": out.getvalue()})
         f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

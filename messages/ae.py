@@ -1,11 +1,13 @@
 import json
-import subprocess
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
-from sys import argv, executable
+from sys import argv
 
 import requests
 
 f = Path(argv[1])
+_ns = {}
 
 while True:
     data = json.loads(f.read_text(encoding="utf-8"))
@@ -17,43 +19,31 @@ while True:
         json=body,
     ).json()
 
-    message = {
+    body["messages"].append({
         "role": "assistant",
         "content": response["content"],
-    }
-    body["messages"].append(message)
+    })
     f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    calls = [block for block in response["content"] if block["type"] == "tool_use"]
+    calls = [b for b in response["content"] if b["type"] == "tool_use"]
     if not calls:
         break
 
-    for index, call in enumerate(calls):
-        stdout = subprocess.run(
-            [
-                executable,
-                "-c",
-                call["input"]["code"],
-            ],
-            text=True,
-            errors="ignore",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        ).stdout
-
-        result = {
+    results = []
+    for call in calls:
+        out = StringIO()
+        with redirect_stdout(out), redirect_stderr(out):
+            exec(call["input"]["code"], _ns)
+        results.append({
             "type": "tool_result",
             "tool_use_id": call["id"],
-            "content": stdout,
-        }
+            "content": out.getvalue(),
+        })
 
-        data = json.loads(f.read_text(encoding="utf-8"))
-        body = data["json"]
-        if index == 0:
-            body["messages"].append({
-                "role": "user",
-                "content": [result],
-            })
-        else:
-            body["messages"][-1]["content"].append(result)
-        f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    data = json.loads(f.read_text(encoding="utf-8"))
+    body = data["json"]
+    body["messages"].append({
+        "role": "user",
+        "content": results,
+    })
+    f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

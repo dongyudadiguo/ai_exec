@@ -1,20 +1,20 @@
 {
-  "url": "https://uuapi.net/v1/messages",
+  "url": "https://openox.tech/v1/messages",
   "headers": {
-    "x-api-key": "sk-f9defa9ed983e71af57c99a27fd05ded73076067ad64a771faa01682afc5457d",
+    "x-api-key": "sk-ebcfbdd8c90f83607b37013220f9ce84851f320880720102",
     "anthropic-version": "2023-06-01",
     "Content-Type": "application/json"
   },
   "json": {
     "model": "claude-opus-5",
-    "max_tokens": 64000,
+    "max_tokens": 32768,
     "stream": false,
     "thinking": {
       "type": "adaptive",
       "display": "summarized"
     },
     "output_config": {
-      "effort": "max"
+      "effort": "xhigh"
     },
     "system": "use Python for any task\ncheck `./skills`\nuser run `./view.vbs` to view the content and call you",
     "tools": [

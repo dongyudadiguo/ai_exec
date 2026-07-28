@@ -1,9 +1,8 @@
 import argparse
 import json
 import os
-import signal
-import subprocess
 import shutil
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -268,40 +267,31 @@ def compact_file(
     }
 
 
-def _stop_parent_runner():
-    """Stop parent ae.py so it cannot start another API turn after compaction.
+def _stop_runner():
+    """Stop the ae.py runner so it cannot start another API turn after compaction.
 
-    ae.py always continues the while-loop once tool children return. The only
-    way to honor "compact then stop" without editing ae.py is to end that parent
-    process after the replacement is on disk. Tool children inherit AE_RUNNER=1
-    when launched from viewer.py.
+    ae.py executes tool code in-process (``exec(code, _ns)``), so this function
+    runs *inside* the runner: ``os.getppid()`` would point at viewer.py, not at
+    ae.py. Killing that parent would take down the viewer while leaving ae.py
+    free to POST the freshly compacted transcript. Ending the current process is
+    therefore the correct way to honor "compact then stop" without editing ae.py.
+
+    Exiting here also means ae.py never appends a tool_result for this call,
+    which is what we want: the compacted transcript has no matching tool_use.
     """
     if os.environ.get("AE_RUNNER") != "1":
         return {"attempted": False, "reason": "AE_RUNNER not set"}
 
-    ppid = os.getppid()
-    if not ppid or ppid <= 1:
-        return {"attempted": False, "reason": "no parent pid"}
-
+    pid = os.getpid()
     try:
-        if os.name == "nt":
-            completed = subprocess.run(
-                ["taskkill", "/PID", str(ppid), "/F"],
-                capture_output=True,
-                text=True,
-                errors="ignore",
-            )
-            return {
-                "attempted": True,
-                "pid": ppid,
-                "ok": completed.returncode == 0,
-                "returncode": completed.returncode,
-                "output": ((completed.stdout or "") + (completed.stderr or "")).strip(),
-            }
-        os.kill(ppid, signal.SIGTERM)
-        return {"attempted": True, "pid": ppid, "ok": True}
-    except OSError as exc:
-        return {"attempted": True, "pid": ppid, "ok": False, "error": str(exc)}
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except (OSError, ValueError):
+        pass
+    # os._exit skips atexit/buffer flushing on purpose: the transcript is already
+    # committed to disk and any further ae.py work would corrupt it.
+    os._exit(0)
+    return {"attempted": True, "pid": pid, "ok": True}  # unreachable
 
 
 def compact_active_file(input_path=None, summary=""):
@@ -317,7 +307,7 @@ def compact_active_file(input_path=None, summary=""):
     """
     path = resolve_input_path(input_path)
     result = compact_file(path, summary, keep_user_turns=0)
-    result["stopped_parent"] = _stop_parent_runner()
+    result["stopped_runner"] = _stop_runner()
     return result
 
 

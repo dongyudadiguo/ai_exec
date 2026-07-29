@@ -1,13 +1,11 @@
 import json
-from contextlib import redirect_stderr, redirect_stdout
-from io import StringIO
+import subprocess
 from pathlib import Path
-from sys import argv
+from sys import argv, executable
 
 import requests
 
 f = Path(argv[1])
-_ns = {}
 
 while True:
     data = json.loads(f.read_text(encoding="utf-8"))
@@ -31,13 +29,16 @@ while True:
 
     results = []
     for call in calls:
-        out = StringIO()
-        with redirect_stdout(out), redirect_stderr(out):
-            exec(call["input"]["code"], _ns)
+        out = subprocess.run(
+            [executable, "-u", "-c", call["input"]["code"]],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            errors="ignore",
+        ).stdout
         results.append({
             "type": "tool_result",
             "tool_use_id": call["id"],
-            "content": out.getvalue(),
+            "content": out or "(no output)",
         })
 
     data = json.loads(f.read_text(encoding="utf-8"))

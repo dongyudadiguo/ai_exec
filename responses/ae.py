@@ -1,13 +1,11 @@
 import json
-from contextlib import redirect_stderr, redirect_stdout
-from io import StringIO
+import subprocess
 from pathlib import Path
-from sys import argv
+from sys import argv, executable
 
 import requests
 
 f = Path(argv[1])
-_ns = {}
 
 while True:
     data = json.loads(f.read_text(encoding="utf-8"))
@@ -27,13 +25,16 @@ while True:
         break
 
     for call in calls:
-        out = StringIO()
-        with redirect_stdout(out), redirect_stderr(out):
-            exec(json.loads(call["arguments"])["code"], _ns)
+        out = subprocess.run(
+            [executable, "-u", "-c", json.loads(call["arguments"])["code"]],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            errors="ignore",
+        ).stdout
         data = json.loads(f.read_text(encoding="utf-8"))
         data["json"]["input"].append({
             "type": "function_call_output",
             "call_id": call["call_id"],
-            "output": out.getvalue(),
+            "output": out,
         })
         f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -62,11 +62,11 @@ _spawn()
 
 def tool_run(code):
     try:
-        _PROC.stdin.write(f"{len(code.encode())}\n{code}")
+        _PROC.stdin.write(f"{len(code)}\n{code}")
         _PROC.stdin.flush()
     except OSError:
         _spawn()
-        _PROC.stdin.write(f"{len(code.encode())}\n{code}")
+        _PROC.stdin.write(f"{len(code)}\n{code}")
         _PROC.stdin.flush()
     lines = []
     for line in _PROC.stdout:

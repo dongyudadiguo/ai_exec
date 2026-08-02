@@ -32,7 +32,7 @@
     "messages": [
       {
         "role": "system",
-        "content": "use Python for any task\ncheck `./skills`\nuser run `./view.vbs` to view the content and call you"
+        "content": "# use Python for any task\n## user runs `./view.vbs` to view the content and eventually calls you via ae.py\n### check `./skills`"
       }
     ]
   }

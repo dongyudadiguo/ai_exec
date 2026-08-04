@@ -34,7 +34,7 @@
     "messages": [
       {
         "role": "system",
-        "content": "# use Python for any task\n## user runs `./view.vbs` to view the content, eventually runs `./ae.py` to call you\n### check `./skills`"
+        "content": "# use Python for any task\n## user runs `./view.vbs`; sending a message auto-runs `ae.py`\n### check `./skills`"
       }
     ]
   }

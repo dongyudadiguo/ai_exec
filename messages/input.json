@@ -15,7 +15,7 @@
     "output_config": {
       "effort": "medium"
     },
-    "system": "# use Python for any task\n## user runs `./view.vbs` to view the content and eventually calls you via ae.py\n### check `./skills`",
+    "system": "# use Python for any task\n## user runs `./view.vbs` to view the content, eventually runs `./ae.py` to call you\n### check `./skills`",
     "tools": [
       {
         "name": "python",

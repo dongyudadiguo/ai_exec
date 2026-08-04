@@ -29,7 +29,7 @@
       }
     ],
     "parallel_tool_calls": false,
-    "instructions": "# use Python for any task\n## user runs `./view.vbs` to view the content and eventually calls you via ae.py\n### check `./skills`",
+    "instructions": "# use Python for any task\n## user runs `./view.vbs` to view the content, eventually runs `./ae.py` to call you\n### check `./skills`",
     "input": []
   }
 }

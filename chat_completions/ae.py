@@ -73,14 +73,19 @@ def tool_run(code):
         if line.rstrip("\n") == _SENTINEL:
             break
         lines.append(line)
-    return "".join(lines)
+    out = "".join(lines)
+    if _MAX_OUT and len(out) > _MAX_OUT:
+        h = _MAX_OUT // 2
+        out = out[:h] + f"\n...[truncated {len(out) - _MAX_OUT} chars]...\n" + out[-h:]
+    return out
 
 f = Path(argv[1])
+_MAX_OUT = json.loads(f.read_text(encoding="utf-8")).get("max_tool_output", 0)
 
 while True:
     data = json.loads(f.read_text(encoding="utf-8"))
     body = data["json"]
-    message = requests.post(data["url"], headers=data["headers"], json=body).json()["choices"][0]["message"]
+    message = requests.post(data["url"], headers=data["headers"], json=body, timeout=data.get("timeout")).json()["choices"][0]["message"]
     body["messages"].append(message)
     f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     if not message.get("tool_calls"):

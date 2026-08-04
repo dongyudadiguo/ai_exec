@@ -73,9 +73,14 @@ def tool_run(code):
         if line.rstrip("\n") == _SENTINEL:
             break
         lines.append(line)
-    return "".join(lines)
+    out = "".join(lines)
+    if _MAX_OUT and len(out) > _MAX_OUT:
+        h = _MAX_OUT // 2
+        out = out[:h] + f"\n...[truncated {len(out) - _MAX_OUT} chars]...\n" + out[-h:]
+    return out
 
 f = Path(argv[1])
+_MAX_OUT = json.loads(f.read_text(encoding="utf-8")).get("max_tool_output", 0)
 
 while True:
     data = json.loads(f.read_text(encoding="utf-8"))
@@ -85,6 +90,7 @@ while True:
         data["url"],
         headers=data["headers"],
         json=body,
+        timeout=data.get("timeout"),
     ).json()
 
     body["messages"].append({

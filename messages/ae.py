@@ -1,4 +1,4 @@
-import json, subprocess, secrets
+import json, queue, subprocess, secrets, threading
 from pathlib import Path
 from sys import argv, executable
 
@@ -69,18 +69,35 @@ def tool_run(code):
         _PROC.stdin.write(f"{len(code)}\n{code}")
         _PROC.stdin.flush()
     lines = []
-    for line in _PROC.stdout:
-        if line.rstrip("\n") == _SENTINEL:
-            break
-        lines.append(line)
-    out = "".join(lines)
+    proc, sentinel, done = _PROC, _SENTINEL, queue.Queue()
+
+    def _read():
+        for line in proc.stdout:
+            if line.rstrip("\n") == sentinel:
+                break
+            lines.append(line)
+        done.put(True)
+
+    threading.Thread(target=_read, daemon=True).start()
+    try:
+        done.get(timeout=_TOOL_TIMEOUT)
+        out = "".join(lines)
+    except queue.Empty:
+        proc.kill()
+        _spawn()
+        out = "".join(lines) + (
+            f"\nTimeoutError: tool execution exceeded {_TOOL_TIMEOUT}s; "
+            "interpreter was restarted (variables restored from the last finished run)\n"
+        )
     if _MAX_OUT and len(out) > _MAX_OUT:
         h = _MAX_OUT // 2
         out = out[:h] + f"\n...[truncated {len(out) - _MAX_OUT} chars]...\n" + out[-h:]
     return out
 
 f = Path(argv[1])
-_MAX_OUT = json.loads(f.read_text(encoding="utf-8")).get("max_tool_output", 0)
+_cfg = json.loads(f.read_text(encoding="utf-8"))
+_MAX_OUT = _cfg.get("max_tool_output", 0)
+_TOOL_TIMEOUT = _cfg.get("timeout")
 
 while True:
     data = json.loads(f.read_text(encoding="utf-8"))
@@ -90,7 +107,6 @@ while True:
         data["url"],
         headers=data["headers"],
         json=body,
-        timeout=data.get("timeout"),
     ).json()
 
     body["messages"].append({

@@ -85,10 +85,7 @@ def tool_run(code):
     except queue.Empty:
         proc.kill()
         _spawn()
-        out = "".join(lines) + (
-            f"\nTimeoutError: tool execution exceeded {_TOOL_TIMEOUT}s; "
-            "interpreter was restarted (variables restored from the last finished run)\n"
-        )
+        out = "".join(lines) + f"\nTimeoutError: tool execution exceeded {_TOOL_TIMEOUT}s\n"
     if _MAX_OUT and len(out) > _MAX_OUT:
         h = _MAX_OUT // 2
         out = out[:h] + f"\n...[truncated {len(out) - _MAX_OUT} chars]...\n" + out[-h:]

@@ -31,7 +31,7 @@
       }
     ],
     "parallel_tool_calls": false,
-    "instructions": "# use Python for any task\n## user runs `./view.vbs`; sending a message auto-runs `ae.py`\n### check `./skills`",
+    "instructions": "# use Python for any task\n## the user runs `./view.vbs` to launch the viewer. Sending a message auto-runs `ae.py`, which calls you through the API and executes your tool calls\n### check `./skills`",
     "input": []
   }
 }

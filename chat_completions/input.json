@@ -34,7 +34,16 @@
     "messages": [
       {
         "role": "system",
-        "content": "# use Python for any task\n## the user runs `./view.vbs` to launch the viewer. Sending a message auto-runs `ae.py`, which calls you through the API and executes your tool calls\n### check `./skills`"
+        "content": "use Python for any task"
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Check the relevant code in view.vbs and the skills folder"
+          }
+        ]
       }
     ]
   }

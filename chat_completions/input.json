@@ -1,5 +1,5 @@
 {
-  "timeout": 120,
+  "timeout": 4,
   "max_tool_output": 20000,
   "url": "https://api.deepseek.com/chat/completions",
   "headers": {
@@ -33,15 +33,11 @@
     "parallel_tool_calls": false,
     "messages": [
       {
-        "role": "system",
-        "content": "use Python for any task"
-      },
-      {
         "role": "user",
         "content": [
           {
             "type": "text",
-            "text": "Check the relevant code in view.vbs and the skills folder"
+            "text": "Check the relevant code in view.vbs"
           }
         ]
       }

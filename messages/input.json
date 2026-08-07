@@ -1,5 +1,5 @@
 {
-  "timeout": 120,
+  "timeout": 4,
   "max_tool_output": 20000,
   "url": "https://openox.tech/v1/messages",
   "headers": {
@@ -17,7 +17,6 @@
     "output_config": {
       "effort": "medium"
     },
-    "system": "use Python for any task",
     "tools": [
       {
         "name": "python",
@@ -45,7 +44,7 @@
         "content": [
           {
             "type": "text",
-            "text": "Check the relevant code in view.vbs and the skills folder"
+            "text": "Check the relevant code in view.vbs"
           }
         ]
       }

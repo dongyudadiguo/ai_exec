@@ -31,14 +31,13 @@
       }
     ],
     "parallel_tool_calls": false,
-    "instructions": "use Python for any task",
     "input": [
       {
         "role": "user",
         "content": [
           {
             "type": "input_text",
-            "text": "Check the relevant code in view.vbs and the skills folder"
+            "text": "Check the relevant code in view.vbs"
           }
         ]
       }

@@ -1000,7 +1000,14 @@ def display_message(m):
 
 
 def load_cached(path=None):
-    """Parse one chat transcript, cached per file so parallel chats never thrash."""
+    """Parse one chat transcript, cached per file so parallel chats never thrash.
+
+    ae.py rewrites the whole transcript file on every step, so a signature
+    change still requires a re-read; but when the rewrite is purely append-only
+    we reuse the previously converted messages and only convert the appended
+    tail (incremental parsing) instead of re-running the conversion over the
+    whole history.
+    """
     input_file = Path(path) if path is not None else INPUT_FILE
     st = input_file.stat()
     signature = (st.st_mtime_ns, st.st_size)
@@ -1018,8 +1025,26 @@ def load_cached(path=None):
             return entry["mtime"], entry["model"], entry["messages"]
         raise
     body = data.get("json", {})
-    messages = chat_transcript(body)
+    items = body.get("messages", [])
     model = body.get("model", "")
+
+    # Append-only fast path: reuse cached messages, convert only the delta.
+    messages = None
+    with _state_cache_lock:
+        prev = _state_cache.get(input_file)
+    if prev is not None and prev.get("items") is not None and prev.get("messages") is not None:
+        prev_items = prev["items"]
+        prev_msgs = prev["messages"]
+        if len(items) >= len(prev_items) and items[:len(prev_items)] == prev_items:
+            delta = items[len(prev_items):]
+            if not delta:
+                messages = prev_msgs
+            else:
+                tail_msgs = chat_transcript({"messages": delta})
+                messages = list(prev_msgs) + tail_msgs
+    if messages is None:
+        messages = chat_transcript(body)
+
     with _state_cache_lock:
         _state_cache[input_file] = {
             "signature": signature,
@@ -1027,6 +1052,7 @@ def load_cached(path=None):
             "messages": messages,
             "model": model,
             "usage": None,
+            "items": items,
         }
         while len(_state_cache) > 12:
             _state_cache.pop(next(iter(_state_cache)), None)
@@ -1319,6 +1345,7 @@ html.chat-empty-rail .chat-new.is-over-content:hover{
 .chat-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(12px);z-index:40;background:var(--toast-bg);color:var(--toast-fg);border-radius:999px;padding:10px 14px;font:12px/1.3 system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 10px 30px var(--shadow);opacity:0;pointer-events:none;transition:opacity .18s ease,transform .18s ease}
 .chat-toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .messages.chat-switching{opacity:.42;filter:blur(.4px);transition:opacity .18s ease,filter .18s ease}
+.messages.no-msg-anim .msg,.messages.no-msg-anim .tool-group{animation:none!important}
 @keyframes chatPop{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:none}}
 @keyframes chatFade{from{opacity:0}to{opacity:1}}
 @media (max-width:1100px){
@@ -1435,7 +1462,8 @@ html.chat-empty-rail .chat-new.is-over-content:hover{
 <script>
 const messagesEl=document.getElementById('messages'), emptyEl=document.getElementById('empty'), composer=document.getElementById('composer'), runBtn=document.getElementById('run'), msgInput=document.getElementById('message'), fileInput=document.getElementById('fileInput'), drop=document.getElementById('drop'), filesEl=document.getElementById('files'), usageText=document.getElementById('usageText'), tokenBar=document.getElementById('tokenBar'), runnerStatus=document.getElementById('runnerStatus'), runnerLabel=document.getElementById('runnerLabel'), newMessagesBtn=document.getElementById('newMessages'), killProcessBtn=document.getElementById('killProcess'), themeToggleBtn=document.getElementById('themeToggle');
 let selectedFiles=[], isRunning=false, phaseLabel='空闲', activeChatId='default', lastUpdated=0, messageCount=0, usageLoaded=false, usageLoading=false, usageGeneration=0, usageReloadQueued=false, unseenMessages=0, firstPaint=true, editInFlight=false;
-let pollTimer=null, pollInFlight=false, pollQueued=false, pollGeneration=0;
+let pollTimer=null, pollInFlight=false, pollQueued=false, pollGeneration=0, pollUnchangedStreak=0;
+const POLL_FAST=120, POLL_RUN=500, POLL_IDLE=1800;
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 function currentTheme(){
@@ -1886,7 +1914,11 @@ function applyMessages(data){
   // Do NOT treat local messageCount===0 as "this payload is complete" — a stale
   // incremental response could otherwise wipe earlier bubbles.
   if(data.reset || offset===0){
-    messagesEl.innerHTML='';appendMessageBatch(msgs);messageCount=count;afterMessageUpdate(wasNear,msgs.length,true);return;
+    // 整窗重建（切对话/首次加载/压缩）时，历史消息不应再逐条弹入。
+    messagesEl.classList.add('no-msg-anim');
+    messagesEl.innerHTML='';appendMessageBatch(msgs);messageCount=count;afterMessageUpdate(wasNear,msgs.length,true);
+    requestAnimationFrame(()=>messagesEl.classList.remove('no-msg-anim'));
+    return;
   }
   if(offset===messageCount){
     if(msgs.length)appendMessageBatch(msgs);messageCount=count;afterMessageUpdate(wasNear,msgs.length);return;
@@ -1921,6 +1953,7 @@ async function poll(){
   const gen=pollGeneration;
   const reqAfter=messageCount;
   const reqSince=lastUpdated;
+  let changed=false;
   try{
     const r=await fetch('/api/state?since='+encodeURIComponent(reqSince)+'&after='+encodeURIComponent(reqAfter)+'&chat='+chatParam());
     const data=await r.json();
@@ -1946,6 +1979,7 @@ async function poll(){
       if(data.count!=null) messageCount=data.count;
       setRunningUi();
     }else{
+      changed=true;
       lastUpdated=data.updated||0;
       invalidateUsage();
       render(data);
@@ -1964,9 +1998,17 @@ async function poll(){
           loadChats();
         }
       }
-      schedulePoll(isRunning?500:1800);
+      // 轮询降级: 有变化 -> 快轮询; 连续无变化 -> 逐步退避到 500ms; 空闲 -> 1800ms。
+      schedulePoll(pollDelay(changed));
     }
   }
+}
+function pollDelay(changed){
+  if(!isRunning) return POLL_IDLE;
+  if(changed){ pollUnchangedStreak=0; return POLL_FAST; }
+  pollUnchangedStreak++;
+  // 运行中但一直没新内容: 120ms -> 250ms -> 400ms -> 500ms 封顶。
+  return [POLL_FAST,250,400,POLL_RUN][Math.min(pollUnchangedStreak-1,3)];
 }
 function addFiles(files){const incoming=[...files].filter(Boolean);if(incoming.length){selectedFiles.push(...incoming);refreshFiles();updateRunLabel()}}
 function refreshFiles(){filesEl.innerHTML=selectedFiles.map((f,i)=>`<span class="file">${esc(f.name)} <button type="button" data-i="${i}">x</button></span>`).join('');updateRunLabel()}

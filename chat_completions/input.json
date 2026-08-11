@@ -1,5 +1,5 @@
 {
-  "timeout": 120,
+  "timeout": 4,
   "max_tool_output": 20000,
   "url": "https://api.deepseek.com/chat/completions",
   "headers": {
@@ -33,8 +33,13 @@
     "parallel_tool_calls": false,
     "messages": [
       {
-        "role": "system",
-        "content": "# use Python for any task\n## user runs `./view.vbs`; sending a message auto-runs `ae.py`\n### check `./skills`"
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Check the relevant code in view.vbs"
+          }
+        ]
       }
     ]
   }

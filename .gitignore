@@ -1,0 +1,9 @@
+# Python
+__pycache__/
+*.pyc
+
+# ae 运行时状态
+*.pkl
+*.tmp
+.ae_runners/
+.ae_active_input

@@ -1,5 +1,5 @@
 {
-  "timeout": 120,
+  "timeout": 4,
   "max_tool_output": 20000,
   "url": "https://openox.tech/v1/messages",
   "headers": {
@@ -17,7 +17,6 @@
     "output_config": {
       "effort": "medium"
     },
-    "system": "# use Python for any task\n## user runs `./view.vbs`; sending a message auto-runs `ae.py`\n### check `./skills`",
     "tools": [
       {
         "name": "python",
@@ -39,6 +38,16 @@
       "type": "auto",
       "disable_parallel_tool_use": true
     },
-    "messages": []
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Check the relevant code in view.vbs"
+          }
+        ]
+      }
+    ]
   }
 }

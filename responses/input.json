@@ -37,7 +37,7 @@
         "content": [
           {
             "type": "input_text",
-            "text": "Check the ae.py file to understand the behavior of your tool invocation"
+            "text": "Please first review `ae.py` to understand your tool-calling behavior"
           }
         ]
       }

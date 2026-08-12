@@ -1933,7 +1933,7 @@ function hideNewMessages(){unseenMessages=0;newMessagesBtn.classList.add('hidden
 function showNewMessages(amount){unseenMessages+=Math.max(1,amount);newMessagesBtn.textContent=`↓ ${unseenMessages} 项新动态`;newMessagesBtn.classList.remove('hidden')}
 function afterMessageUpdate(wasNear,added,reset=false){
   requestAnimationFrame(()=>{
-    if(firstPaint||wasNear){window.scrollTo({top:document.documentElement.scrollHeight,behavior:firstPaint?'auto':'smooth'});hideNewMessages()}
+    if(firstPaint||wasNear){window.scrollTo({top:document.documentElement.scrollHeight,behavior:(firstPaint||reset)?'auto':'smooth'});hideNewMessages()}
     else if(added)showNewMessages(added);
     firstPaint=false;
     refreshEditableLastUser();

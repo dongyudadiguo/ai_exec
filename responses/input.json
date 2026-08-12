@@ -37,7 +37,7 @@
         "content": [
           {
             "type": "input_text",
-            "text": "check ae.py, I run view.vbs to have a conversation with you"
+            "text": "Check the ae.py file to understand the behavior of your tool invocation"
           }
         ]
       }

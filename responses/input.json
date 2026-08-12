@@ -1,13 +1,13 @@
 {
   "timeout": 120,
   "max_tool_output": 20000,
-  "url": "https://opencode.ai/zen/v1/responses",
+  "url": "https://api.deepseek.com/v1/responses",
   "headers": {
-    "Authorization": "Bearer sk-3wu5xJ84dZp75mbPv5r0YH7SCw8G69hxa85M8gXOm02rgXIqCwYZSMzJcKpLFZqg",
+    "Authorization": "Bearer sk-86cb8086a03b4f61bcbe03de1fe6e2b1",
     "Content-Type": "application/json"
   },
   "json": {
-    "model": "deepseek-v4-flash-free",
+    "model": "deepseek-v4-flash",
     "reasoning": {
       "effort": "max"
     },

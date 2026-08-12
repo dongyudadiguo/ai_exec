@@ -44,7 +44,7 @@
         "content": [
           {
             "type": "text",
-            "text": "Check the relevant code in view.vbs"
+            "text": "check ae.py, I run view.vbs to have a conversation with you"
           }
         ]
       }

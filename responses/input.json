@@ -3,7 +3,7 @@
   "max_tool_output": 20000,
   "url": "https://direct.linkai.pics/v1/responses",
   "headers": {
-    "Authorization": "Bearer sk-06212354d71f26d9f229ef0728c10691bf4a0db72d53315915a7184c73fa07cd",
+    "Authorization": "Bearer sk-f9a99e06ce04ab3a4dbfb609ffa5b100eb8140004c6fffe85a73823714f94708",
     "Content-Type": "application/json"
   },
   "json": {

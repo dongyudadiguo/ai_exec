@@ -54,7 +54,7 @@ def _spawn():
     _PROC = subprocess.Popen(
         [executable, "-u", "-c", _DRIVER, _SENTINEL, _STATE_FILE],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        text=True, errors="ignore", bufsize=1,
+        text=True, encoding="utf-8", errors="replace", bufsize=1,
     )
 
 _PROC = _SENTINEL = None

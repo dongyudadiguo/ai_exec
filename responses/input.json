@@ -1,15 +1,15 @@
 {
   "timeout": 120,
   "max_tool_output": 20000,
-  "url": "https://api.deepseek.com/v1/responses",
+  "url": "https://direct.linkai.pics/v1/responses",
   "headers": {
-    "Authorization": "Bearer sk-86cb8086a03b4f61bcbe03de1fe6e2b1",
+    "Authorization": "Bearer sk-06212354d71f26d9f229ef0728c10691bf4a0db72d53315915a7184c73fa07cd",
     "Content-Type": "application/json"
   },
   "json": {
-    "model": "deepseek-v4-flash",
+    "model": "grok-4.6",
     "reasoning": {
-      "effort": "max"
+      "effort": "high"
     },
     "stream": false,
     "tools": [

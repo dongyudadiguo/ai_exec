@@ -413,17 +413,8 @@ def running(chat_id=None):
 
 
 def runner_idle(chat_id=None):
-    cid, target = resolve_chat(chat_id)
-    if not running(cid):
-        return False
-    try:
-        _, _, messages = load_cached(target)
-    except Exception:
-        return False
-    if not messages:
-        return False
-    last = messages[-1]
-    return last.get("role") == "assistant" and not last.get("tool_calls")
+    # ae.py 一轮结束后直接退出，不再挂起等下一条消息。
+    return False
 
 
 def pending_tool_progress(messages):
@@ -459,8 +450,6 @@ def runner_phase(messages, is_running):
                 "tool_total": total,
             }
         return {"phase": "waiting_ai", "label": "等待 AI", "tool_done": done, "tool_total": total}
-    if messages and messages[-1].get("role") == "assistant" and not messages[-1].get("tool_calls"):
-        return {"phase": "idle_wait", "label": "等待消息", "tool_done": None, "tool_total": None}
     return {"phase": "waiting_ai", "label": "等待 AI", "tool_done": None, "tool_total": None}
 
 
@@ -982,12 +971,7 @@ def api_send():
         except FileNotFoundError as exc:
             return str(exc), 404
         if running(cid):
-            if not runner_idle(cid):
-                return "process is already running", 409
-            if not (text.strip() or files):
-                return "message is empty", 400
-            append_user_message(text, files, target)
-            return jsonify({"ok": True, "message_appended": True, "chat": cid, "resumed": True})
+            return "process is already running", 409
         repair_unclosed_tool_calls(target)
         appended = bool(text.strip() or files)
         if appended:

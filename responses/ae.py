@@ -1,4 +1,4 @@
-import json, os, queue, subprocess, threading, time
+import json, os, queue, subprocess, threading
 from pathlib import Path
 from sys import argv, executable
 
@@ -48,10 +48,6 @@ def _atomic_write(data):
     temp = f.with_name(f"{f.name}.{os.getpid()}.tmp")
     temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(temp, f)
-
-def _file_sig():
-    st = f.stat()
-    return (st.st_mtime_ns, st.st_size)
 
 def _spawn():
     global _PROC
@@ -121,8 +117,6 @@ def tool_run(code):
 _cfg = json.loads(f.read_text(encoding="utf-8"))
 _MAX_OUT = _cfg.get("max_tool_output", 0)
 _TOOL_TIMEOUT = _cfg.get("timeout")
-# 空闲时轮询 input.json 的间隔（秒），等新消息追加进来
-_IDLE_POLL = float(_cfg.get("idle_poll", 1.0))
 
 while True:
     data = json.loads(f.read_text(encoding="utf-8"))
@@ -139,26 +133,7 @@ while True:
 
     calls = [item for item in output if item["type"] == "function_call"]
     if not calls:
-        # 一轮对话结束：不退出，保持 driver 子进程（工具内存）存活，
-        # 持续等待下一条用户消息被追加到 input.json 后再继续。
-        try:
-            sig = _file_sig()
-        except OSError:
-            sig = None
-        while True:
-            time.sleep(_IDLE_POLL)
-            try:
-                new_sig = _file_sig()
-            except OSError:
-                continue
-            if new_sig == sig:
-                continue
-            try:
-                json.loads(f.read_text(encoding="utf-8"))["json"]["input"]
-            except Exception:
-                continue
-            break
-        continue
+        break
 
     for call in calls:
         out = tool_run(json.loads(call["arguments"])["code"])

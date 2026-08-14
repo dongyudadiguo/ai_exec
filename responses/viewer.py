@@ -160,13 +160,15 @@ def list_chats():
             mtime = path.stat().st_mtime
         except OSError:
             mtime = 0
+        is_running = running(cid)
         chats.append({
             "id": cid,
             "name": "默认" if cid == "default" else cid,
             "file": path.name,
             "mtime": mtime,
             "active": cid == active,
-            "running": running(cid),
+            "running": is_running,
+            "idle": runner_idle(cid) if is_running else False,
         })
     # default first, then recent named chats
     chats.sort(key=lambda c: (0 if c["id"] == "default" else 1, -c["mtime"], c["name"]))
@@ -1876,15 +1878,17 @@ function appendMessageBatch(msgs){
     }
   }
 }
+function runnerBusy(){return isRunning&&!runnerIdle}
 function updateRunLabel(){
-  runBtn.textContent=isRunning?'停止':(msgInput.value.trim()||selectedFiles.length?'发送并运行':'继续运行');
+  if(runBtn.textContent==='结束中…') return;
+  runBtn.textContent=runnerBusy()?'停止':(msgInput.value.trim()||selectedFiles.length?'发送并运行':'继续运行');
 }
 function setRunningUi(){
-  runnerStatus.classList.toggle('hidden',!isRunning);
+  runnerStatus.classList.toggle('hidden',!runnerBusy());
   runnerLabel.textContent=phaseLabel||'正在运行…';
-  runBtn.classList.toggle('stop',isRunning);
+  runBtn.classList.toggle('stop',runnerBusy());
   // Heal stuck disabled state after stop; submit handler manages its own disable window.
-  if(!isRunning && runBtn.textContent!=='结束中…') runBtn.disabled=false;
+  if(!runnerBusy() && runBtn.textContent!=='结束中…') runBtn.disabled=false;
   updateRunLabel();
 }
 function nearBottom(){return window.innerHeight+window.scrollY>=document.documentElement.scrollHeight-140}
@@ -2047,7 +2051,7 @@ async function poll(){
       pollQueued=false;
       schedulePoll(0);
     }else{
-      if(typeof loadChats==='function' && (isRunning || (Array.isArray(chatsCache)&&chatsCache.some(c=>c&&c.running)))){
+      if(typeof loadChats==='function' && (runnerBusy() || (Array.isArray(chatsCache)&&chatsCache.some(c=>c&&c.running&&!c.idle)))){
         if(!window.__aeChatRefreshAt || Date.now()-window.__aeChatRefreshAt>2500){
           window.__aeChatRefreshAt=Date.now();
           loadChats();
@@ -2059,7 +2063,7 @@ async function poll(){
   }
 }
 function pollDelay(changed){
-  if(!isRunning) return POLL_IDLE;
+  if(!runnerBusy()) return POLL_IDLE;
   if(changed){ pollUnchangedStreak=0; return POLL_FAST; }
   pollUnchangedStreak++;
   // 运行中但一直没新内容: 120ms -> 250ms -> 400ms -> 500ms 封顶。
@@ -2089,14 +2093,16 @@ function syncRunningFromCache(){
   const run=!!(row && row.running);
   if(run && !isRunning){
     isRunning=true;
-    if(!phaseLabel || phaseLabel==='空闲') phaseLabel='运行中';
+    runnerIdle=!!row.idle;
+    if(runnerIdle) phaseLabel='等待消息';
+    else if(!phaseLabel || phaseLabel==='空闲') phaseLabel='运行中';
     setRunningUi();
   }
 }
 msgInput.value=readDraft();resizeComposer();updateRunLabel();
 msgInput.addEventListener('input',()=>{writeDraft(msgInput.value);resizeComposer();updateRunLabel()});
-msgInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&!isRunning){e.preventDefault();composer.requestSubmit()}});
-document.addEventListener('keydown',async e=>{if(e.key==='Escape'&&isRunning){e.preventDefault();await stopRunner(runBtn)}});
+msgInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&!runnerBusy()){e.preventDefault();composer.requestSubmit()}});
+document.addEventListener('keydown',async e=>{if(e.key==='Escape'&&runnerBusy()){e.preventDefault();await stopRunner(runBtn)}});
 newMessagesBtn.addEventListener('click',()=>{window.scrollTo({top:document.documentElement.scrollHeight,behavior:'smooth'});hideNewMessages()});
 window.addEventListener('scroll',()=>{if(nearBottom())hideNewMessages()},{passive:true});
 messagesEl.addEventListener('dblclick',e=>{
@@ -2158,6 +2164,7 @@ async function stopRunner(btn){
     // Always re-enable: setRunningUi only updates labels, not disabled.
     if(btn) btn.disabled=false;
     isRunning=false;
+    runnerIdle=false;
     phaseLabel='空闲';
     setRunningUi();
     schedulePoll(0);
@@ -2178,10 +2185,10 @@ async function shutdownViewer(){
 }
 if(killProcessBtn)killProcessBtn.addEventListener('click',()=>shutdownViewer());
 if(themeToggleBtn) themeToggleBtn.addEventListener('click',()=>toggleTheme());
-runBtn.addEventListener('click',async e=>{if(isRunning){e.preventDefault();await stopRunner(runBtn)}});
+runBtn.addEventListener('click',async e=>{if(runnerBusy()){e.preventDefault();await stopRunner(runBtn)}});
 composer.addEventListener('submit',async e=>{
-  e.preventDefault();if(isRunning&&!runnerIdle)return;const submitted=msgInput.value,fd=new FormData();fd.append('message',submitted);selectedFiles.forEach(f=>fd.append('files',f,f.name));runBtn.disabled=true;
-  try{const r=await fetch('/api/send?chat='+chatParam(),{method:'POST',body:fd});if(!r.ok)throw new Error(await r.text());if(msgInput.value===submitted){msgInput.value='';clearDraft();resizeComposer()}selectedFiles=[];refreshFiles();isRunning=true;phaseLabel='等待 AI';setRunningUi();schedulePoll(0)}catch(err){alert(err.message||'运行失败')}finally{runBtn.disabled=false}
+  e.preventDefault();if(runnerBusy())return;const submitted=msgInput.value,fd=new FormData();fd.append('message',submitted);selectedFiles.forEach(f=>fd.append('files',f,f.name));runBtn.disabled=true;
+  try{const r=await fetch('/api/send?chat='+chatParam(),{method:'POST',body:fd});if(!r.ok)throw new Error(await r.text());if(msgInput.value===submitted){msgInput.value='';clearDraft();resizeComposer()}selectedFiles=[];refreshFiles();isRunning=true;runnerIdle=false;phaseLabel='等待 AI';setRunningUi();schedulePoll(0)}catch(err){alert(err.message||'运行失败')}finally{runBtn.disabled=false}
 });
 
 
@@ -2414,8 +2421,9 @@ function renderChatList(){
     const name=String(c.name||id);
     const active=id===activeChatId; // per-tab selection, not the server-global one
     const isRun=!!c.running;
-    const meta=isRun ? '运行中' : relativeTime(c.mtime);
-    return `<div class="chat-item${active?' active':''}${isRun?' running':''}" data-chat-id="${esc(id)}" role="listitem" title="${esc(name)}${isRun?' · 运行中':''}">
+    const isIdle=!!c.idle;
+    const meta=isRun ? (isIdle ? '等待消息' : '运行中') : relativeTime(c.mtime);
+    return `<div class="chat-item${active?' active':''}${isRun&&!isIdle?' running':''}" data-chat-id="${esc(id)}" role="listitem" title="${esc(name)}${isRun?(isIdle?' · 等待消息':' · 运行中'):''}">
       <span class="chat-item-tile" aria-hidden="true">${esc(chatTileLabel(name, id))}</span>
       <div class="chat-item-main">
         <div class="chat-item-name">${esc(name)}</div>
@@ -2473,6 +2481,7 @@ function resetComposerLocal(opts){
   usageLoaded=false;
   // Avoid carrying the previous chat's running button state until /api/state arrives.
   isRunning=false;
+  runnerIdle=false;
   phaseLabel='空闲';
   setRunningUi();
 }
@@ -2565,6 +2574,7 @@ async function stopChat(id){
     const data=await r.json();
     if(String(id)===String(activeChatId)){
       isRunning=false;
+      runnerIdle=false;
       phaseLabel='\u7a7a\u95f2';
       setRunningUi();
       schedulePoll(0);
@@ -2788,12 +2798,11 @@ class Handler(BaseHTTPRequestHandler):
                         # file back up by itself.  Otherwise it is busy -> 409.
                         if not runner_idle(cid):
                             return self.send_text("process is already running", 409)
-                        repair_unclosed_tool_calls(target)
-                        appended = bool(text.strip() or files)
-                        if appended:
-                            append_user_message(text, files, target)
+                        if not (text.strip() or files):
+                            return self.send_text("message is empty", 400)
+                        append_user_message(text, files, target)
                         return self.send_json({
-                            "ok": True, "message_appended": appended,
+                            "ok": True, "message_appended": True,
                             "chat": cid, "resumed": True,
                         })
                     # Auto-close dangling tool calls (interrupted run) so resuming

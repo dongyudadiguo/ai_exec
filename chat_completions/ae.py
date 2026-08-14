@@ -1,4 +1,4 @@
-import json, queue, subprocess, threading, time
+import json, os, queue, subprocess, threading, time
 from pathlib import Path
 from sys import argv, executable
 
@@ -43,6 +43,15 @@ while True:
 if len(argv) < 2:
     raise SystemExit("usage: ae.py <request.json>")
 f = Path(argv[1])
+
+def _atomic_write(data):
+    temp = f.with_name(f"{f.name}.{os.getpid()}.tmp")
+    temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temp, f)
+
+def _file_sig():
+    st = f.stat()
+    return (st.st_mtime_ns, st.st_size)
 
 def _spawn():
     global _PROC
@@ -120,22 +129,30 @@ while True:
     body = data["json"]
     message = requests.post(data["url"], headers=data["headers"], json=body).json()["choices"][0]["message"]
     body["messages"].append(message)
-    f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    _atomic_write(data)
     if not message.get("tool_calls"):
         # 一轮对话结束：不退出，保持 driver 子进程（工具内存）存活，
         # 持续等待下一条用户消息被追加到 input.json 后再继续。
-        processed = len(body["messages"])
+        try:
+            sig = _file_sig()
+        except OSError:
+            sig = None
         while True:
             time.sleep(_IDLE_POLL)
             try:
-                items = json.loads(f.read_text(encoding="utf-8"))["json"]["messages"]
+                new_sig = _file_sig()
+            except OSError:
+                continue
+            if new_sig == sig:
+                continue
+            try:
+                json.loads(f.read_text(encoding="utf-8"))["json"]["messages"]
             except Exception:
                 continue
-            if len(items) > processed:
-                break
+            break
         continue
     for call in message["tool_calls"]:
         out = tool_run(json.loads(call["function"]["arguments"])["code"])
         data = json.loads(f.read_text(encoding="utf-8")); body = data["json"]
         body["messages"].append({"role": "tool", "tool_call_id": call["id"], "content": out})
-        f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        _atomic_write(data)

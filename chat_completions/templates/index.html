@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat Completions · input.json 查看器</title>
+<script>
+/* Apply theme before paint */
+(function(){
+  try{
+    var t=localStorage.getItem('ae-theme');
+    if(t!=='dark'&&t!=='light'){
+      t=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';
+    }
+    document.documentElement.setAttribute('data-theme', t);
+  }catch(e){
+    document.documentElement.setAttribute('data-theme','light');
+  }
+})();
+</script>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
+</head>
+<body>
+<aside id="chatRail" class="chat-rail" aria-label="对话列表">
+  <div class="chat-rail-body">
+    <div class="chat-search">
+      <svg class="chat-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <input id="chatSearch" type="search" placeholder="搜索对话" autocomplete="off" spellcheck="false">
+    </div>
+    <div id="chatList" class="chat-list" role="list"></div>
+    <button id="chatNew" class="chat-new" type="button" title="新建对话" aria-label="新建对话">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+      <span>新建对话</span>
+    </button>
+  </div>
+</aside>
+<div id="chatMenu" class="chat-menu" role="menu" aria-hidden="true"></div>
+<div id="chatModal" class="chat-modal-backdrop" aria-hidden="true">
+  <div class="chat-modal" role="dialog" aria-modal="true" aria-labelledby="chatModalTitle">
+    <h3 id="chatModalTitle">新建对话</h3>
+    <p id="chatModalDesc">可留空自动命名。将创建为 input_名称.json，并复制默认配置。</p>
+    <input id="chatModalInput" type="text" maxlength="48" placeholder="例如：重构计划">
+    <div class="chat-modal-actions">
+      <button id="chatModalCancel" type="button">取消</button>
+      <button id="chatModalOk" class="primary" type="button">创建</button>
+    </div>
+  </div>
+</div>
+<div id="chatToast" class="chat-toast" role="status" aria-live="polite"></div>
+<main class="app">
+  <section class="messages">
+    <article class="msg model-message"><div class="model-meta"><div class="role">模型</div><div id="model" class="content">model</div></div><div class="model-actions"><button type="button" class="theme-toggle" id="themeToggle" title="切换亮/暗主题" aria-label="切换亮/暗主题"><span class="theme-icon-light" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></span><span class="theme-icon-dark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg></span></button><button id="killProcess" class="kill-process" type="button" title="关闭当前端口的查看器进程">关闭查看器</button></div></article>
+    <div id="messages" class="message-list"></div>
+    <div id="runnerStatus" class="runner-status hidden"><span class="status-spinner"></span><span id="runnerLabel">正在运行…</span></div>
+    <div id="empty" class="empty hidden">暂无消息</div>
+  </section>
+  <form id="composer" class="composer"><div class="composer-inner"><div id="drop" class="drop"><textarea id="message" name="message" placeholder="输入消息，或拖入/粘贴文件、图片；留空可直接运行"></textarea><div id="files" class="files"></div><input id="fileInput" name="files" type="file" multiple class="hidden"></div><button id="run" class="run" type="submit">运行</button></div><div class="usage-direct"><div id="usageText">Token：计算中…</div><div class="token-track"><div id="tokenBar" class="token-bar"></div></div></div></form>
+</main>
+<button id="newMessages" class="new-messages hidden" type="button">↓ 新消息</button>
+<script src="/static/vendor/marked.umd.js"></script>
+<script src="/static/vendor/purify.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

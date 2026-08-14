@@ -518,6 +518,28 @@ def running(chat_id=None):
         return _runner_pid_unlocked(chat_id) is not None
 
 
+def runner_idle(chat_id=None):
+    """True when the persistent runner is alive but settled.
+
+    ae.py never exits between rounds; when it is idle it waits for a new user
+    turn with no writes to the transcript.  That state is visible in the
+    transcript itself: the last message is a completed assistant message with
+    no pending tool call.  So viewer.py and ae.py coordinate purely through
+    the shared input file — no extra files or signals needed.
+    """
+    cid, target = resolve_chat(chat_id)
+    if not running(cid):
+        return False
+    try:
+        _, _, messages = load_cached(target)
+    except Exception:
+        return False
+    if not messages:
+        return False
+    last = messages[-1]
+    return last.get("role") == "assistant" and not last.get("tool_calls")
+
+
 def pending_tool_progress(messages):
     """Return (done, total) for the latest assistant tool group, or None."""
     for index in range(len(messages) - 1, -1, -1):
@@ -546,10 +568,13 @@ def pending_tool_progress(messages):
 def runner_phase(messages, is_running):
     """Classify runner wait state from transcript shape.
 
-    ae.py flow while alive:
+    ae.py flow while alive (persistent runner, never exits on its own):
     - POST model request  -> waiting_ai
     - run each tool child -> waiting_tool
     - after all tool results are written, loop back to POST -> waiting_ai
+    - after a round with no tool calls, ae.py stays alive and waits for the
+      next user turn.  The transcript then ends with a completed assistant
+      message, which we report as idle_wait ("等待消息").
     """
     if not is_running:
         return {
@@ -579,8 +604,8 @@ def runner_phase(messages, is_running):
 
     if messages and messages[-1].get("role") == "assistant" and not messages[-1].get("tool_calls"):
         return {
-            "phase": "finishing",
-            "label": "即将结束",
+            "phase": "idle_wait",
+            "label": "等待消息",
             "tool_done": None,
             "tool_total": None,
         }
@@ -1555,7 +1580,7 @@ html.chat-empty-rail .chat-new.is-over-content:hover{
 <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
 <script>
 const messagesEl=document.getElementById('messages'), emptyEl=document.getElementById('empty'), composer=document.getElementById('composer'), runBtn=document.getElementById('run'), msgInput=document.getElementById('message'), fileInput=document.getElementById('fileInput'), drop=document.getElementById('drop'), filesEl=document.getElementById('files'), usageText=document.getElementById('usageText'), tokenBar=document.getElementById('tokenBar'), runnerStatus=document.getElementById('runnerStatus'), runnerLabel=document.getElementById('runnerLabel'), newMessagesBtn=document.getElementById('newMessages'), killProcessBtn=document.getElementById('killProcess'), themeToggleBtn=document.getElementById('themeToggle');
-let selectedFiles=[], isRunning=false, phaseLabel='空闲', activeChatId='default', lastUpdated=0, messageCount=0, usageLoaded=false, usageLoading=false, usageGeneration=0, usageReloadQueued=false, unseenMessages=0, firstPaint=true, editInFlight=false;
+let selectedFiles=[], isRunning=false, runnerIdle=false, phaseLabel='空闲', activeChatId='default', lastUpdated=0, messageCount=0, usageLoaded=false, usageLoading=false, usageGeneration=0, usageReloadQueued=false, unseenMessages=0, firstPaint=true, editInFlight=false;
 let pollTimer=null, pollInFlight=false, pollQueued=false, pollGeneration=0, pollUnchangedStreak=0;
 const POLL_FAST=120, POLL_RUN=500, POLL_IDLE=1800;
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -2025,6 +2050,7 @@ function applyMessages(data){
 }
 function render(data){
   isRunning=!!data.running;
+  runnerIdle=data.phase==='idle_wait';
   phaseLabel=data.label||(isRunning?'运行中':'空闲');
   document.getElementById('model').textContent=data.model||'model';
   setRunningUi();
@@ -2064,6 +2090,7 @@ async function poll(){
     }
     if(data.unchanged){
       isRunning=!!data.running;
+      runnerIdle=data.phase==='idle_wait';
       phaseLabel=data.label||(isRunning?'运行中':'空闲');
       if(data.count!=null && data.count<messageCount){
         // Transcript shrank (compaction): full resync.
@@ -2219,7 +2246,7 @@ if(killProcessBtn)killProcessBtn.addEventListener('click',()=>shutdownViewer());
 if(themeToggleBtn) themeToggleBtn.addEventListener('click',()=>toggleTheme());
 runBtn.addEventListener('click',async e=>{if(isRunning){e.preventDefault();await stopRunner(runBtn)}});
 composer.addEventListener('submit',async e=>{
-  e.preventDefault();if(isRunning)return;const submitted=msgInput.value,fd=new FormData();fd.append('message',submitted);selectedFiles.forEach(f=>fd.append('files',f,f.name));runBtn.disabled=true;
+  e.preventDefault();if(isRunning&&!runnerIdle)return;const submitted=msgInput.value,fd=new FormData();fd.append('message',submitted);selectedFiles.forEach(f=>fd.append('files',f,f.name));runBtn.disabled=true;
   try{const r=await fetch('/api/send?chat='+chatParam(),{method:'POST',body:fd});if(!r.ok)throw new Error(await r.text());if(msgInput.value===submitted){msgInput.value='';clearDraft();resizeComposer()}selectedFiles=[];refreshFiles();isRunning=true;phaseLabel='等待 AI';setRunningUi();schedulePoll(0)}catch(err){alert(err.message||'运行失败')}finally{runBtn.disabled=false}
 });
 
@@ -2821,7 +2848,20 @@ class Handler(BaseHTTPRequestHandler):
                     except FileNotFoundError as exc:
                         return self.send_text(str(exc), 404)
                     if running(cid):
-                        return self.send_text("process is already running", 409)
+                        # Persistent runner: it stays alive between rounds.  If it
+                        # is idle (transcript settled on an assistant reply), a new
+                        # user turn is appended and the running process picks the
+                        # file back up by itself.  Otherwise it is busy -> 409.
+                        if not runner_idle(cid):
+                            return self.send_text("process is already running", 409)
+                        repair_unclosed_tool_calls(target)
+                        appended = bool(text.strip() or files)
+                        if appended:
+                            append_user_message(text, files, target)
+                        return self.send_json({
+                            "ok": True, "message_appended": appended,
+                            "chat": cid, "resumed": True,
+                        })
                     # Auto-close dangling tool calls (interrupted run) so resuming
                     # never submits an unanswered tool call to the API.
                     repair_unclosed_tool_calls(target)

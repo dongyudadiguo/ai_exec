@@ -1,4 +1,4 @@
-import json, queue, subprocess, threading
+import json, queue, subprocess, threading, time
 from pathlib import Path
 from sys import argv, executable
 
@@ -112,6 +112,8 @@ def tool_run(code):
 _cfg = json.loads(f.read_text(encoding="utf-8"))
 _MAX_OUT = _cfg.get("max_tool_output", 0)
 _TOOL_TIMEOUT = _cfg.get("timeout")
+# 空闲时轮询 input.json 的间隔（秒），等新消息追加进来
+_IDLE_POLL = float(_cfg.get("idle_poll", 1.0))
 
 while True:
     data = json.loads(f.read_text(encoding="utf-8"))
@@ -120,7 +122,18 @@ while True:
     body["messages"].append(message)
     f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     if not message.get("tool_calls"):
-        break
+        # 一轮对话结束：不退出，保持 driver 子进程（工具内存）存活，
+        # 持续等待下一条用户消息被追加到 input.json 后再继续。
+        processed = len(body["messages"])
+        while True:
+            time.sleep(_IDLE_POLL)
+            try:
+                items = json.loads(f.read_text(encoding="utf-8"))["json"]["messages"]
+            except Exception:
+                continue
+            if len(items) > processed:
+                break
+        continue
     for call in message["tool_calls"]:
         out = tool_run(json.loads(call["function"]["arguments"])["code"])
         data = json.loads(f.read_text(encoding="utf-8")); body = data["json"]

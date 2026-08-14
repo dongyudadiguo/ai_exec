@@ -5,56 +5,8 @@ from sys import argv, executable
 import requests
 
 _DRIVER = r"""
-import sys, io, traceback, pickle
-import os
+import sys, io, traceback
 from contextlib import redirect_stdout, redirect_stderr
-STATE_FILE = sys.argv[1]
-_SKIP = {"__name__", "__persist__", "__persisted__"}
-
-def _load():
-    try:
-        with open(STATE_FILE, "rb") as f:
-            data = pickle.load(f)
-        if isinstance(data, dict) and data.get("__persist__") is True:
-            data.pop("__persist__", None)
-            data.pop("__persisted__", None)
-            return data
-    except (FileNotFoundError, EOFError, pickle.UnpicklingError):
-        pass
-    return {}
-
-def _declared(ns):
-    names = ns.get("__persist__")
-    if isinstance(names, str):
-        names = [names]
-    if isinstance(names, (list, tuple, set, frozenset)):
-        return {n for n in names if isinstance(n, str) and n not in _SKIP}
-    return set()
-
-def _save(ns):
-    names = _declared(ns)
-    if not names:
-        try:
-            os.remove(STATE_FILE)
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
-        return
-    out = {"__persist__": True}
-    for k in names:
-        if k not in ns:
-            continue
-        v = ns[k]
-        try:
-            pickle.dumps(v)
-        except Exception:
-            continue
-        out[k] = v
-    tmp = STATE_FILE + ".tmp"
-    with open(tmp, "wb") as f:
-        pickle.dump(out, f)
-    os.replace(tmp, STATE_FILE)
 
 def _recv():
     h = sys.stdin.buffer.readline()
@@ -74,8 +26,7 @@ def _send(text):
     sys.stdout.buffer.write(f"{len(data)}\n".encode("ascii") + data)
     sys.stdout.buffer.flush()
 
-NS = _load()
-NS["__name__"] = "__main__"
+NS = {"__name__": "__main__"}
 while True:
     code = _recv()
     if code is None:
@@ -86,20 +37,18 @@ while True:
             exec(compile(code, "<tool>", "exec"), NS)
     except Exception:
         buf.write(traceback.format_exc())
-    _save(NS)
     _send(buf.getvalue())
 """
 
-if len(argv) < 3:
-    raise SystemExit("usage: ae.py <request.json> <state.pkl>")
+if len(argv) < 2:
+    raise SystemExit("usage: ae.py <request.json>")
 f = Path(argv[1])
-_STATE_FILE = str(Path(argv[2]).resolve())
 
 def _spawn():
     global _PROC
     old = _PROC
     _PROC = subprocess.Popen(
-        [executable, "-u", "-c", _DRIVER, _STATE_FILE],
+        [executable, "-u", "-c", _DRIVER],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
     )
     if old is None:

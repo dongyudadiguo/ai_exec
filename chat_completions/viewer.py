@@ -58,12 +58,6 @@ def _chat_id_from_filename(name: str):
     return None
 
 
-def _state_file_for_input(input_path) -> Path:
-    """Per-request pickle next to the transcript: input.json -> input.state.pkl."""
-    path = Path(input_path)
-    return path.with_name(f"{path.stem}.state.pkl")
-
-
 def _filename_for_chat_id(chat_id: str) -> str:
     if chat_id is not None and not isinstance(chat_id, str):
         raise ValueError("无效的对话 ID")
@@ -652,7 +646,7 @@ def start_process(chat_id=None, input_file=None):
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             startupinfo.wShowWindow = 0
         proc = subprocess.Popen(
-            [agent_python(), str(AE_FILE), str(target), str(_state_file_for_input(target))],
+            [agent_python(), str(AE_FILE), str(target)],
             cwd=str(ROOT),
             creationflags=creationflags,
             env=env,

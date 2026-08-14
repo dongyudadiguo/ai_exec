@@ -34,7 +34,12 @@ def _declared(ns):
 def _save(ns):
     names = _declared(ns)
     if not names:
-        os.remove(STATE_FILE)
+        try:
+            os.remove(STATE_FILE)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
         return
     out = {"__persist__": True}
     for k in names:
@@ -99,9 +104,15 @@ def _spawn():
     )
     if old is None:
         return
-    old.kill()
-    old.stdin.close()
-    old.stdout.close()
+    try:
+        old.kill()
+    except OSError:
+        pass
+    for pipe in (old.stdin, old.stdout):
+        try:
+            pipe.close()
+        except OSError:
+            pass
 
 _PROC = None
 _spawn()
@@ -173,14 +184,9 @@ while True:
     for call in calls:
         out = tool_run(json.loads(call["arguments"])["code"])
         data = json.loads(f.read_text(encoding="utf-8"))
-        items = data["json"]["input"]
-        item = {
+        data["json"]["input"].append({
             "type": "function_call_output",
             "call_id": call["call_id"],
             "output": out,
-        }
-        for i, it in enumerate(items):
-            if it.get("type") == "function_call" and it.get("call_id") == call["call_id"]:
-                items.insert(i + 1, item)
-                break
+        })
         f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

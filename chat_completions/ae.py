@@ -34,7 +34,12 @@ def _declared(ns):
 def _save(ns):
     names = _declared(ns)
     if not names:
-        os.remove(STATE_FILE)
+        try:
+            os.remove(STATE_FILE)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
         return
     out = {"__persist__": True}
     for k in names:
@@ -99,9 +104,15 @@ def _spawn():
     )
     if old is None:
         return
-    old.kill()
-    old.stdin.close()
-    old.stdout.close()
+    try:
+        old.kill()
+    except OSError:
+        pass
+    for pipe in (old.stdin, old.stdout):
+        try:
+            pipe.close()
+        except OSError:
+            pass
 
 _PROC = None
 _spawn()
@@ -164,14 +175,5 @@ while True:
     for call in message["tool_calls"]:
         out = tool_run(json.loads(call["function"]["arguments"])["code"])
         data = json.loads(f.read_text(encoding="utf-8")); body = data["json"]
-        item = {"role": "tool", "tool_call_id": call["id"], "content": out}
-        msgs = body["messages"]
-        for i, it in enumerate(msgs):
-            tcs = it.get("tool_calls") or []
-            if it.get("role") == "assistant" and any(tc.get("id") == call["id"] for tc in tcs):
-                j = i + 1
-                while j < len(msgs) and msgs[j].get("role") == "tool":
-                    j += 1
-                msgs.insert(j, item)
-                break
+        body["messages"].append({"role": "tool", "tool_call_id": call["id"], "content": out})
         f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

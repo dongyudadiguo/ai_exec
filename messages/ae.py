@@ -34,7 +34,12 @@ def _declared(ns):
 def _save(ns):
     names = _declared(ns)
     if not names:
-        os.remove(STATE_FILE)
+        try:
+            os.remove(STATE_FILE)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
         return
     out = {"__persist__": True}
     for k in names:
@@ -99,9 +104,15 @@ def _spawn():
     )
     if old is None:
         return
-    old.kill()
-    old.stdin.close()
-    old.stdout.close()
+    try:
+        old.kill()
+    except OSError:
+        pass
+    for pipe in (old.stdin, old.stdout):
+        try:
+            pipe.close()
+        except OSError:
+            pass
 
 _PROC = None
 _spawn()
@@ -184,15 +195,8 @@ while True:
 
     data = json.loads(f.read_text(encoding="utf-8"))
     body = data["json"]
-    item = {"role": "user", "content": results}
-    msgs = body["messages"]
-    ids = {c["id"] for c in calls}
-    for i, it in enumerate(msgs):
-        content = it.get("content")
-        if it.get("role") == "assistant" and isinstance(content, list) and any(
-            isinstance(b, dict) and b.get("type") == "tool_use" and b.get("id") in ids
-            for b in content
-        ):
-            msgs.insert(i + 1, item)
-            break
+    body["messages"].append({
+        "role": "user",
+        "content": results,
+    })
     f.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

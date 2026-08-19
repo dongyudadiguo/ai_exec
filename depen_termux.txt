@@ -1,0 +1,7 @@
+pkg update
+pkg install python
+pip install flask requests
+
+# 然后进入 termux_responses 目录运行:
+# python viewer.py
+# 不要 pip install psutil（Android 不支持）

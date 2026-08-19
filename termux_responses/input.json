@@ -1,0 +1,46 @@
+{
+  "timeout": 120,
+  "max_tool_output": 20000,
+  "url": "https://direct.linkai.pics/v1/responses",
+  "headers": {
+    "Authorization": "Bearer sk-f9a99e06ce04ab3a4dbfb609ffa5b100eb8140004c6fffe85a73823714f94708",
+    "Content-Type": "application/json"
+  },
+  "json": {
+    "model": "grok-4.6",
+    "reasoning": {
+      "effort": "high"
+    },
+    "stream": false,
+    "tools": [
+      {
+        "type": "function",
+        "name": "python",
+        "description": "Execute Python code",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "code"
+          ]
+        }
+      }
+    ],
+    "parallel_tool_calls": false,
+    "input": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Please first review `ae.py` to understand your tool-calling behavior"
+          }
+        ]
+      }
+    ]
+  }
+}

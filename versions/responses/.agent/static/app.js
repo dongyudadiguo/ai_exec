@@ -1,5 +1,5 @@
 const messagesEl=document.getElementById('messages'), emptyEl=document.getElementById('empty'), composer=document.getElementById('composer'), runBtn=document.getElementById('run'), msgInput=document.getElementById('message'), fileInput=document.getElementById('fileInput'), drop=document.getElementById('drop'), filesEl=document.getElementById('files'), usageText=document.getElementById('usageText'), tokenBar=document.getElementById('tokenBar'), runnerStatus=document.getElementById('runnerStatus'), runnerLabel=document.getElementById('runnerLabel'), newMessagesBtn=document.getElementById('newMessages'), killProcessBtn=document.getElementById('killProcess'), themeToggleBtn=document.getElementById('themeToggle');
-let selectedFiles=[], isRunning=false, runnerIdle=false, phaseLabel='空闲', activeChatId='default', lastUpdated=0, messageCount=0, usageLoaded=false, usageLoading=false, usageGeneration=0, usageReloadQueued=false, unseenMessages=0, firstPaint=true, editInFlight=false;
+let selectedFiles=[], isRunning=false, runnerIdle=false, isStopping=false, isSending=false, phaseLabel='空闲', activeChatId='default', lastUpdated=0, messageCount=0, usageLoaded=false, usageLoading=false, usageGeneration=0, usageReloadQueued=false, unseenMessages=0, firstPaint=true, editInFlight=false;
 let pollTimer=null, pollInFlight=false, pollQueued=false, pollGeneration=0, pollUnchangedStreak=0;
 const POLL_FAST=120, POLL_RUN=500, POLL_IDLE=1800;
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -363,15 +363,15 @@ function appendMessageBatch(msgs){
 }
 function runnerBusy(){return isRunning&&!runnerIdle}
 function updateRunLabel(){
-  if(runBtn.textContent==='结束中…') return;
+  if(isStopping) return;
   runBtn.textContent=runnerBusy()?'停止':(msgInput.value.trim()||selectedFiles.length?'发送并运行':'继续运行');
 }
 function setRunningUi(){
   runnerStatus.classList.toggle('hidden',!runnerBusy());
   runnerLabel.textContent=phaseLabel||'正在运行…';
   runBtn.classList.toggle('stop',runnerBusy());
-  // Heal stuck disabled state after stop; submit handler manages its own disable window.
-  if(!runnerBusy() && runBtn.textContent!=='结束中…') runBtn.disabled=false;
+  // Heal stuck disabled state after stop; submit/stop handlers manage their own disable window.
+  if(!runnerBusy() && !isStopping && !isSending) runBtn.disabled=false;
   updateRunLabel();
 }
 function nearBottom(){return window.innerHeight+window.scrollY>=document.documentElement.scrollHeight-140}
@@ -584,8 +584,8 @@ function syncRunningFromCache(){
 }
 msgInput.value=readDraft();resizeComposer();updateRunLabel();
 msgInput.addEventListener('input',()=>{writeDraft(msgInput.value);resizeComposer();updateRunLabel()});
-msgInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&!runnerBusy()){e.preventDefault();composer.requestSubmit()}});
-document.addEventListener('keydown',async e=>{if(e.key==='Escape'&&runnerBusy()){e.preventDefault();await stopRunner(runBtn)}});
+msgInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&!runnerBusy()&&!isSending&&!isStopping){e.preventDefault();composer.requestSubmit()}});
+document.addEventListener('keydown',async e=>{if(e.key==='Escape'&&runnerBusy()&&!isStopping){e.preventDefault();await stopRunner(runBtn)}});
 newMessagesBtn.addEventListener('click',()=>{window.scrollTo({top:document.documentElement.scrollHeight,behavior:'smooth'});hideNewMessages()});
 window.addEventListener('scroll',()=>{if(nearBottom())hideNewMessages()},{passive:true});
 messagesEl.addEventListener('dblclick',e=>{
@@ -639,12 +639,13 @@ async function loadUsage(){
   }
 }
 async function stopRunner(btn){
-  if(!isRunning)return;
+  if(!isRunning||isStopping)return;
+  isStopping=true;
   if(btn){btn.disabled=true;btn.textContent='结束中…'}
   try{
     await fetch('/api/stop?chat='+chatParam(),{method:'POST'});
   }finally{
-    // Always re-enable: setRunningUi only updates labels, not disabled.
+    isStopping=false;
     if(btn) btn.disabled=false;
     isRunning=false;
     runnerIdle=false;
@@ -668,10 +669,10 @@ async function shutdownViewer(){
 }
 if(killProcessBtn)killProcessBtn.addEventListener('click',()=>shutdownViewer());
 if(themeToggleBtn) themeToggleBtn.addEventListener('click',()=>toggleTheme());
-runBtn.addEventListener('click',async e=>{if(runnerBusy()){e.preventDefault();await stopRunner(runBtn)}});
+runBtn.addEventListener('click',async e=>{if(e.detail>1||isStopping||isSending){e.preventDefault();return}if(runnerBusy()){e.preventDefault();await stopRunner(runBtn)}});
 composer.addEventListener('submit',async e=>{
-  e.preventDefault();if(runnerBusy())return;const submitted=msgInput.value,fd=new FormData();fd.append('message',submitted);selectedFiles.forEach(f=>fd.append('files',f,f.name));runBtn.disabled=true;
-  try{const r=await fetch('/api/send?chat='+chatParam(),{method:'POST',body:fd});if(!r.ok)throw new Error(await r.text());if(msgInput.value===submitted){msgInput.value='';clearDraft();resizeComposer()}selectedFiles=[];refreshFiles();isRunning=true;runnerIdle=false;phaseLabel='等待 AI';setRunningUi();schedulePoll(0)}catch(err){alert(err.message||'运行失败')}finally{runBtn.disabled=false}
+  e.preventDefault();if(runnerBusy()||isSending||isStopping)return;const submitted=msgInput.value,fd=new FormData();fd.append('message',submitted);selectedFiles.forEach(f=>fd.append('files',f,f.name));isSending=true;runBtn.disabled=true;
+  try{const r=await fetch('/api/send?chat='+chatParam(),{method:'POST',body:fd});if(!r.ok)throw new Error(await r.text());if(msgInput.value===submitted){msgInput.value='';clearDraft();resizeComposer()}selectedFiles=[];refreshFiles();isRunning=true;runnerIdle=false;phaseLabel='等待 AI';setRunningUi();schedulePoll(0)}catch(err){alert(err.message||'运行失败')}finally{isSending=false;runBtn.disabled=false;setRunningUi()}
 });
 
 
@@ -965,6 +966,8 @@ function resetComposerLocal(opts){
   // Avoid carrying the previous chat's running button state until /api/state arrives.
   isRunning=false;
   runnerIdle=false;
+  isStopping=false;
+  isSending=false;
   phaseLabel='空闲';
   setRunningUi();
 }
